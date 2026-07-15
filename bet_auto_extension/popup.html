@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Bet Bot</title>
+    <style>
+        :root {
+            --bg-main: #0f1115;
+            --bg-card: #1a1d24;
+            --border-color: #2a2d36;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --accent-blue: #3b82f6;
+            --accent-blue-hover: #2563eb;
+            --accent-green: #10b981;
+            --accent-green-hover: #059669;
+            --accent-red: #ef4444;
+            --accent-red-hover: #dc2626;
+            --accent-yellow: #f59e0b;
+        }
+
+        body { 
+            width: 340px; 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            background: var(--bg-main); 
+            color: var(--text-main); 
+            margin: 0;
+            padding: 16px; 
+            box-sizing: border-box;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .header h2 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        #alert-msg { 
+            font-size: 13px; 
+            font-weight: 600; 
+            text-align: center; 
+            min-height: 18px;
+            margin-bottom: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .settings-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 16px;
+        }
+
+        .input-group { margin-bottom: 12px; }
+        .input-group:last-child { margin-bottom: 0; }
+        .input-group label { 
+            display: block; 
+            font-size: 12px; 
+            font-weight: 500;
+            margin-bottom: 6px; 
+            color: var(--text-muted); 
+            text-transform: uppercase;
+        }
+        .input-group input, .input-group select { 
+            width: 100%; 
+            padding: 10px 12px; 
+            box-sizing: border-box; 
+            background: var(--bg-main); 
+            border: 1px solid var(--border-color); 
+            color: var(--text-main); 
+            border-radius: 8px; 
+            font-size: 14px;
+            outline: none;
+        }
+        .input-group input:focus, .input-group select:focus {
+            border-color: var(--accent-blue);
+        }
+
+        #license-key {
+            border: 1px solid var(--accent-yellow);
+            color: var(--accent-yellow);
+        }
+
+        .status-panel {
+            text-align: center;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 16px;
+        }
+        #bot-status { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+        #server-status { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+        
+        .profit-container {
+            margin-top: 8px; 
+            padding-top: 8px;
+            border-top: 1px dashed var(--border-color);
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+        #profit-display { font-weight: 800; font-size: 16px; }
+
+        .btn { 
+            width: 100%; padding: 12px; font-size: 14px; font-weight: 700; 
+            cursor: pointer; border: none; border-radius: 8px; 
+            transition: all 0.2s ease; display: flex; justify-content: center;
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn-save { background: var(--accent-blue); color: white; margin-bottom: 16px; }
+        .btn-save:hover { background: var(--accent-blue-hover); }
+        .btn-start { background: var(--accent-green); color: white; }
+        .btn-start:hover { background: var(--accent-green-hover); }
+        .btn-stop { background: var(--accent-red); color: white; }
+        .btn-stop:hover { background: var(--accent-red-hover); }
+        .btn-reset { 
+            background: transparent; color: var(--accent-yellow); 
+            border: 1px solid var(--accent-yellow); margin-top: 12px; 
+        }
+    </style>
+</head>
+<body>
+    
+    <div class="header">
+        <h2>🤖 AI Engine Core</h2>
+    </div>
+    
+    <div id="alert-msg"></div>
+
+    <div class="settings-card">
+        <div class="input-group">
+            <label>License Key 🔒</label>
+            <input type="password" id="license-key" placeholder="Enter Authentication Key">
+        </div>
+        <div class="input-group">
+            <label>Base Stake (₦)</label>
+            <input type="number" id="base-stake" placeholder="e.g. 100">
+        </div>
+        <div class="input-group">
+            <label>Take Profit (+₦)</label>
+            <input type="number" id="tp-limit" placeholder="e.g. 5000">
+        </div>
+        <div class="input-group">
+            <label>Stop Loss (-₦)</label>
+            <input type="number" id="sl-limit" placeholder="e.g. 10000">
+        </div>
+        <div class="input-group">
+            <label>Max Loss Streak</label>
+            <input type="number" id="max-streak-limit" placeholder="Circuit Breaker (e.g. 5)">
+        </div>
+        <div class="input-group">
+            <label>Strategy Mode</label>
+            <select id="betting-mode">
+                <option value="OU">⚽ Over 2.5 Single</option>
+                <option value="1X2">🏆 1X2 Value Single</option>
+                <option value="GG">🎯 GG Single</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label>Telegram Chat ID (Optional)</label>
+            <input type="text" id="chat-id-input" placeholder="e.g. 123456789">
+        </div>
+    </div>
+
+    <button id="save-btn" class="btn btn-save">💾 Save Configuration</button>
+
+    <div class="status-panel">
+        <div id="bot-status">Bot: OFF 🔴</div>
+        <div id="server-status">Checking Server...</div>
+        <div class="profit-container">
+            Session P&L: <span id="profit-display">₦0.00</span>
+        </div>
+    </div>
+
+    <button id="toggle-btn" class="btn btn-start">▶ ENABLE AUTO-BET</button>
+    <button id="reset-btn" class="btn btn-reset">🔄 Master Reset</button>
+
+    <script src="popup.js"></script>
+</body>
+</html>

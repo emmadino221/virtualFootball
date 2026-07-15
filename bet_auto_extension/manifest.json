@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Executor Bot",
+  "version": "2.0",
+  "description": "AI-driven betting automation with UI Control Panel.",
+  "permissions": [
+    "activeTab", 
+    "scripting", 
+    "storage"
+  ],
+ "host_permissions": [
+    "https://*.bet9ja.com/*",
+    "http://78.47.19.148:5000/*"
+],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Bot Control Panel"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://vsmobile.bet9ja.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
