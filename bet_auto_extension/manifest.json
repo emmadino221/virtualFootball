@@ -10,7 +10,7 @@
   ],
  "host_permissions": [
     "https://*.bet9ja.com/*",
-    "http://78.47.19.148:5000/*"
+    "https://159.65.25.30/*"
 ],
   "action": {
     "default_popup": "popup.html",

@@ -9,6 +9,8 @@ const SELECTORS = {
     closeTicketBtn: "#button_sent-ticket-close"      
 };
 
+const API_BASE_URL = 'https://159.65.25.30/virtual-api';
+
 const POLLING_INTERVAL_MS = 3000;
 let lastBetWeek = null;
 
@@ -273,7 +275,7 @@ async function fetchAIData() {
         const st = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'totalProfit', 'bettingMode', 'licenseKey']);
         const currentMode = st.bettingMode || 'OU';
         
-        const response = await fetch('http://78.47.19.148:5000/sync', {
+        const response = await fetch(`${API_BASE_URL}/sync`, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
@@ -342,7 +344,7 @@ async function fetchAIData() {
 async function isWeekReady() {
     try {
         const st = await chrome.storage.local.get(['licenseKey']);
-        const response = await fetch('http://78.47.19.148:5000/is_week_ready', {
+        const response = await fetch(`${API_BASE_URL}/is_week_ready`, {
             headers: { 'X-License-Key': st.licenseKey || '' }
         });
         if (response.status === 401) return null;
@@ -449,7 +451,7 @@ async function executeBets(payload) {
             updateOverlayTotalProfit(currentTotal);
 
             if (conf.chatId) {
-                fetch('http://78.47.19.148:5000/send_receipt', {
+                fetch(`${API_BASE_URL}/send_receipt`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-License-Key': conf.licenseKey },
                     body: JSON.stringify({ chat_id: conf.chatId, result: resStr, stake: st.pendingBet.stake, profit: st.pendingBet.profit, net_profit: currentTotal, win_streak: wStrk, loss_streak: currentLocalStreak, max_win_streak: mWStrk, max_loss_streak: mLStrk })

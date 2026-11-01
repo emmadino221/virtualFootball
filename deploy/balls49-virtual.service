@@ -1,0 +1,20 @@
+[Unit]
+Description=Balls49 Virtual Football generator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=balls49
+Group=balls49
+WorkingDirectory=/home/balls49/virtualFootball
+EnvironmentFile=/etc/balls49/virtual.env
+ExecStart=/home/balls49/virtualFootball/.venv/bin/python /home/balls49/virtualFootball/new.py
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

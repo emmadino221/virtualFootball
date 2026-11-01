@@ -126,7 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                const response = await fetch('http://78.47.19.148:5000/get_bets', {
+                const response = await fetch('https://159.65.25.30/virtual-api/get_bets', {
                     headers: { 'X-License-Key': res.licenseKey || '' }
                 });
                 

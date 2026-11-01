@@ -15,25 +15,31 @@ import requests
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+from pathlib import Path
 import joblib
 import numpy as np
 import threading
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+DB_PATH = Path(os.getenv("VIRTUAL_DB_PATH", BASE_DIR / "matches.db")).expanduser()
+AI_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_MODEL_PATH", BASE_DIR / "ai_brain.pkl")).expanduser()
+AI_GG_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_GG_MODEL_PATH", BASE_DIR / "ai_brain_gg.pkl")).expanduser()
+GOOGLE_CREDENTIALS_FILE = Path(os.getenv("GOOGLE_CREDENTIALS_FILE", BASE_DIR / "credentials.json")).expanduser()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-VALID_KEYS = os.getenv("VALID_KEYS", "MASTER-KEY-999").split(",")
+VALID_KEYS = [key.strip() for key in os.getenv("VALID_KEYS", "").split(",") if key.strip()]
 
-if not TOKEN or not CHAT_ID:
-    raise ValueError("Missing Telegram credentials. Check your .env file.")
+if not TOKEN or not CHAT_ID or not VALID_KEYS:
+    raise ValueError("Missing Telegram or extension credentials. Configure the service environment.")
 
 print("⏳ Loading Dual-Brain AI System...")
 try:
-    ai_package = joblib.load('ai_brain.pkl')
+    ai_package = joblib.load(AI_MODEL_PATH)
     ai_model = ai_package['model']
     ai_encoder = ai_package['encoder']
     
-    ai_package_gg = joblib.load('ai_brain_gg.pkl')
+    ai_package_gg = joblib.load(AI_GG_MODEL_PATH)
     ai_model_gg = ai_package_gg['model']
     print("🧠 DUAL AI Brains loaded and ready to predict!")
 except Exception as e:
@@ -108,7 +114,12 @@ def send_receipt():
 def run_server():
     import logging
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
-    app.run(host='0.0.0.0', port=5000, use_reloader=False, debug=False)
+    app.run(
+        host=os.getenv("VIRTUAL_API_HOST", "127.0.0.1"),
+        port=int(os.getenv("VIRTUAL_API_PORT", "5000")),
+        use_reloader=False,
+        debug=False,
+    )
 
 def send_telegram_message(text, target_chat_id=None):
     cid = target_chat_id if target_chat_id else CHAT_ID
@@ -170,7 +181,7 @@ def handle_telegram_command(text, req_chat_id):
         send_telegram_message("🔄 <b>COMMAND RECEIVED:</b> System Reset. Wiped to zero.", req_chat_id)
     elif main_cmd == "/history":
         try:
-            conn_hist = sqlite3.connect("matches.db")
+            conn_hist = sqlite3.connect(DB_PATH, timeout=20)
             c_hist = conn_hist.cursor()
             history = c_hist.execute("SELECT week, result_ou, result_1x2, result_gg FROM weekly_accumulators ORDER BY id DESC LIMIT 5").fetchall()
             conn_hist.close()
@@ -222,7 +233,7 @@ def calculate_total_goals(score_str):
 
 def get_current_stats():
     try:
-        conn_hist = sqlite3.connect("matches.db")
+        conn_hist = sqlite3.connect(DB_PATH, timeout=20)
         c_hist = conn_hist.cursor()
         history = c_hist.execute("SELECT result_1x2, result_ou, result_gg FROM weekly_accumulators ORDER BY id ASC").fetchall()
         conn_hist.close()
@@ -249,7 +260,7 @@ def safe_google_export(week, shortlisted_targets, stats, all_targets, max_retrie
     for attempt in range(max_retries):
         try:
             scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive"]
-            creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+            creds = ServiceAccountCredentials.from_json_keyfile_name(str(GOOGLE_CREDENTIALS_FILE), scope)
             client = gspread.authorize(creds)
             sheet1 = client.open("VirtualFootballResults").worksheet("Sheet1")
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -432,7 +443,8 @@ def predict_with_ai(raw_matches):
     
     return scored, best_1x2_single, best_ou_single, best_gg_single
 
-conn = sqlite3.connect("matches.db", timeout=20)
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+conn = sqlite3.connect(DB_PATH, timeout=20)
 cursor = conn.cursor()
 cursor.execute("CREATE TABLE IF NOT EXISTS matches (id INTEGER PRIMARY KEY AUTOINCREMENT, home_team TEXT, away_team TEXT, home_odds REAL, draw_odds REAL, away_odds REAL, prediction TEXT, confidence REAL, actual_result TEXT, prediction_status TEXT, timestamp TEXT, week TEXT, live_score TEXT, match_status TEXT, is_shortlisted INTEGER DEFAULT 0)")
 cursor.execute("CREATE TABLE IF NOT EXISTS weekly_accumulators (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, week TEXT, result_1x2 TEXT, result_ou TEXT)")
@@ -524,8 +536,8 @@ while True:
         tracked_week = current_week
 
         try:
-            new_ai = joblib.load('ai_brain.pkl'); ai_model = new_ai['model']; ai_encoder = new_ai['encoder']
-            new_ai_gg = joblib.load('ai_brain_gg.pkl'); ai_model_gg = new_ai_gg['model']
+            new_ai = joblib.load(AI_MODEL_PATH); ai_model = new_ai['model']; ai_encoder = new_ai['encoder']
+            new_ai_gg = joblib.load(AI_GG_MODEL_PATH); ai_model_gg = new_ai_gg['model']
         except Exception: pass
         
         fast_check = extract_raw_odds_js()
