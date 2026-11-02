@@ -52,6 +52,11 @@ the previous configuration if validation fails. The `balls49-virtual.service`
 generator and `balls49-virtual-feed.service` publisher are enabled at boot and
 restart automatically after a failure.
 
+The website feed publisher defaults to a 10-second interval. For an existing
+installation, set `VIRTUAL_FEED_INTERVAL_SECONDS=10` in
+`/etc/balls49/virtual.env` and restart `balls49-virtual-feed.service` to apply
+the faster cadence. The frontend checks for feed updates every 10 seconds.
+
 After installation, confirm both services are active:
 
 ```bash

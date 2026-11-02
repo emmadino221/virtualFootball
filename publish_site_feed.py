@@ -17,7 +17,7 @@ DB_PATH = Path(os.getenv("VIRTUAL_DB_PATH", BASE_DIR / "matches.db")).expanduser
 FEED_URL = os.getenv("VIRTUAL_FEED_URL", "")
 FEED_SECRET = os.getenv("VIRTUAL_FEED_SECRET", "")
 SOURCE_ID = os.getenv("VIRTUAL_FEED_SOURCE_ID", "virtualfootball")
-PUBLISH_INTERVAL_SECONDS = int(os.getenv("VIRTUAL_FEED_INTERVAL_SECONDS", "30"))
+PUBLISH_INTERVAL_SECONDS = int(os.getenv("VIRTUAL_FEED_INTERVAL_SECONDS", "10"))
 
 
 def timestamp_ms(value):
