@@ -572,6 +572,8 @@ while True:
                 selected_gg = rank([m for m in valid if m["prediction_gg"] == "GG"], "ai_confidence_gg", 1)
                 selected_ng = rank([m for m in valid if m["prediction_gg"] == "NG"], "ai_confidence_gg", 1)
                 selected_over = rank([m for m in valid if m["prediction_gg"] == "GG" and m["ai_confidence_gg"] >= 60], "ai_confidence_gg", 2)
+                if len(selected_over) != 2:
+                    selected_over = []
                 for m in scored:
                     m["website_markets"] = [key for key, group in [("over", selected_over), ("gg", selected_gg), ("ng", selected_ng), ("win", selected_win)] if m in group]
                 current_live_targets = []
