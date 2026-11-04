@@ -1,5 +1,6 @@
 import json
 import uuid
+from over15_model import predict as predict_over15
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -27,6 +28,9 @@ load_dotenv(BASE_DIR / ".env")
 DB_PATH = Path(os.getenv("VIRTUAL_DB_PATH", BASE_DIR / "matches.db")).expanduser()
 AI_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_MODEL_PATH", BASE_DIR / "ai_brain.pkl")).expanduser()
 AI_GG_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_GG_MODEL_PATH", BASE_DIR / "ai_brain_gg.pkl")).expanduser()
+AI_OVER15_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_OVER15_MODEL_PATH", BASE_DIR / "ai_brain_over15.pkl")).expanduser()
+ai_model_over15 = None
+
 GOOGLE_CREDENTIALS_FILE = Path(os.getenv("GOOGLE_CREDENTIALS_FILE", BASE_DIR / "credentials.json")).expanduser()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -429,6 +433,7 @@ def predict_with_ai(raw_matches):
             "over_15_odds": m.get("over_15_odds", 0.0), "gg_odds": m.get("gg_odds", 0.0), "ng_odds": m.get("ng_odds", 0.0),
             "prediction": pred_class, "prediction_ou": "OVER 2.5", "ai_confidence": confidence,
             "prediction_gg": pred_class_gg, "ai_confidence_gg": confidence_gg, "model_valid": model_valid,
+            "over15_confidence": predict_over15(ai_model_over15, m),
             "settled": False, "last_known_score": "0 - 0"
         })
     def get_pred_odds(m):
@@ -454,7 +459,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS matches (id INTEGER PRIMARY KEY AUTOI
 cursor.execute("CREATE TABLE IF NOT EXISTS weekly_accumulators (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, week TEXT, result_1x2 TEXT, result_ou TEXT)")
 cursor.execute("PRAGMA table_info(matches)")
 existing_columns = [row[1] for row in cursor.fetchall()]
-for col, col_type in [("website_markets", "TEXT"), ("website_round", "TEXT"), ("confidence_gg", "REAL"), ("prediction_ou", "TEXT"), ("prediction_ou_status", "TEXT"), ("prediction_gg", "TEXT"), ("over_15_odds", "REAL"), ("gg_odds", "REAL"), ("ng_odds", "REAL")]:
+for col, col_type in [("confidence_over15", "REAL"), ("goals15", "TEXT"), ("website_markets", "TEXT"), ("website_round", "TEXT"), ("confidence_gg", "REAL"), ("prediction_ou", "TEXT"), ("prediction_ou_status", "TEXT"), ("prediction_gg", "TEXT"), ("over_15_odds", "REAL"), ("gg_odds", "REAL"), ("ng_odds", "REAL")]:
     if col not in existing_columns: cursor.execute(f"ALTER TABLE matches ADD COLUMN {col} {col_type}")
 cursor.execute("PRAGMA table_info(weekly_accumulators)")
 acc_cols = [row[1] for row in cursor.fetchall()]
@@ -544,6 +549,11 @@ while True:
             new_ai_gg = joblib.load(AI_GG_MODEL_PATH); ai_model_gg = new_ai_gg['model']
         except Exception: pass
         
+        try:
+            ai_model_over15 = joblib.load(AI_OVER15_MODEL_PATH)
+        except Exception:
+            ai_model_over15 = None
+
         fast_check = extract_raw_odds_js()
         if not fast_check:
             empty_page_counter += 1
@@ -571,7 +581,7 @@ while True:
                 selected_win = rank([m for m in valid if m["prediction"] in {"HOME", "AWAY"} and float(m[{"HOME": "home_odds", "AWAY": "away_odds"}[m["prediction"]]]) > 1.70], "ai_confidence", 1)
                 selected_gg = rank([m for m in valid if m["prediction_gg"] == "GG"], "ai_confidence_gg", 1)
                 selected_ng = rank([m for m in valid if m["prediction_gg"] == "NG"], "ai_confidence_gg", 1)
-                selected_over = rank([m for m in valid if m["prediction_gg"] == "GG" and m["ai_confidence_gg"] >= 60], "ai_confidence_gg", 2)
+                selected_over = rank([m for m in scored if m["over15_confidence"] is not None and m["over15_confidence"] >= 60], "over15_confidence", 2)
                 if len(selected_over) != 2:
                     selected_over = []
                 for m in scored:
@@ -582,7 +592,7 @@ while True:
                     m["is_shortlisted"] = m["is_1x2_target"] or m["is_ou_target"] or m["is_gg_target"]
                     if m["is_shortlisted"]: current_live_targets.append(m)
                     week_state["all_targets"].append(m)
-                    try: cursor.execute("INSERT INTO matches (home_team, away_team, home_odds, draw_odds, away_odds, over_15_odds, gg_odds, ng_odds, prediction, prediction_ou, prediction_gg, timestamp, week, live_score, match_status, is_shortlisted, confidence, confidence_gg, website_round, website_markets) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (m["home_team"], m["away_team"], m["home_odds"], m["draw_odds"], m["away_odds"], m["over_15_odds"], m["gg_odds"], m["ng_odds"], m["prediction"], "OVER 2.5", m["prediction_gg"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), current_week, "0 - 0", "UPCOMING", m["is_shortlisted"], m["ai_confidence"], m["ai_confidence_gg"] if m.get("model_valid") else None, website_round, json.dumps(m["website_markets"])))
+                    try: cursor.execute("INSERT INTO matches (home_team, away_team, home_odds, draw_odds, away_odds, over_15_odds, gg_odds, ng_odds, prediction, prediction_ou, prediction_gg, timestamp, week, live_score, match_status, is_shortlisted, confidence, confidence_gg, website_round, website_markets, confidence_over15, goals15) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (m["home_team"], m["away_team"], m["home_odds"], m["draw_odds"], m["away_odds"], m["over_15_odds"], m["gg_odds"], m["ng_odds"], m["prediction"], "OVER 2.5", m["prediction_gg"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), current_week, "0 - 0", "UPCOMING", m["is_shortlisted"], m["ai_confidence"], m["ai_confidence_gg"] if m.get("model_valid") else None, website_round, json.dumps(m["website_markets"]), m["over15_confidence"], ("OVER" if m["over15_confidence"] >= 50 else "UNDER") if m["over15_confidence"] is not None else None))
                     except Exception: pass
                 conn.commit()
 

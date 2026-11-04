@@ -1,5 +1,7 @@
 import time
 import subprocess
+import sys
+from pathlib import Path
 from datetime import datetime
 
 # ==========================================================
@@ -21,6 +23,9 @@ while True:
         # This command runs your train_model.py script exactly as if you typed it in the terminal
         result = subprocess.run(["python", "train_model.py"], capture_output=True, text=True)
         
+        over_result = subprocess.run([sys.executable, str(Path(__file__).with_name("train_model_over15.py"))], capture_output=True, text=True)
+        print(over_result.stdout if over_result.returncode == 0 else over_result.stderr)
+
         # Check if the training was successful
         if result.returncode == 0:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AI Retraining Complete. 'ai_brain.pkl' successfully updated!")

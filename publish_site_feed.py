@@ -36,7 +36,7 @@ def build_snapshot(db_path=DB_PATH, source_id=SOURCE_ID, source_at=None):
     connection.row_factory = sqlite3.Row
     try:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(matches)")}
-        optional = ["home_odds", "draw_odds", "away_odds", "confidence_gg", "website_round", "website_markets"]
+        optional = ["home_odds", "draw_odds", "away_odds", "confidence_gg", "website_round", "website_markets", "confidence_over15", "goals15"]
         extra = ", ".join(name if name in columns else f"NULL AS {name}" for name in optional)
         where = "WHERE is_shortlisted = 1" if "website_markets" not in columns else "WHERE website_markets IS NOT NULL OR is_shortlisted = 1"
         rows = connection.execute(
@@ -67,6 +67,8 @@ def build_snapshot(db_path=DB_PATH, source_id=SOURCE_ID, source_at=None):
             "pick": pick if pick in {"HOME", "DRAW", "AWAY"} else None,
             "btts": btts if btts in {"GG", "NG"} else None,
             "confidence": float(confidence) if confidence is not None else None,
+            "goals15": row["goals15"],
+            "over15Confidence": float(row["confidence_over15"]) if row["confidence_over15"] is not None else None,
             "selectedMarkets": selected,
             "roundId": row["website_round"],
             "winOdds": win_odds,

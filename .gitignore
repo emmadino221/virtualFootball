@@ -7,3 +7,4 @@ __pycache__/
 matches.db
 matches.db-shm
 matches.db-wal
+ai_brain_over15.pkl
