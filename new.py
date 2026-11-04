@@ -1,3 +1,5 @@
+import json
+import uuid
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -407,8 +409,9 @@ def predict_with_ai(raw_matches):
         if (ht, at) in seen: continue
         seen.add((ht, at))
         ho, do, ao = float(m["home_odds"]), float(m["draw_odds"]), float(m["away_odds"])
+        model_valid = True
         try: h_id = ai_encoder.transform([ht])[0]; a_id = ai_encoder.transform([at])[0]
-        except ValueError: h_id, a_id = 0, 0 
+        except ValueError: h_id, a_id = 0, 0; model_valid = False
         h_pts, h_gf, h_ga = calculate_dynamic_form(ht, cursor)
         a_pts, a_gf, a_ga = calculate_dynamic_form(at, cursor)
         pts_diff = h_pts - a_pts
@@ -419,12 +422,13 @@ def predict_with_ai(raw_matches):
             pred_class = ai_model.predict(features_1x2)[0]; confidence = ai_model.predict_proba(features_1x2)[0][list(ai_model.classes_).index(pred_class)] * 100
             pred_class_gg = ai_model_gg.predict(features_gg)[0]; confidence_gg = ai_model_gg.predict_proba(features_gg)[0][list(ai_model_gg.classes_).index(pred_class_gg)] * 100
         except Exception:
+            model_valid = False
             pred_class, confidence = "HOME", 33.3; pred_class_gg, confidence_gg = "NG", 50.0
         scored.append({
             "home_team": ht, "away_team": at, "home_odds": ho, "draw_odds": do, "away_odds": ao,
             "over_15_odds": m.get("over_15_odds", 0.0), "gg_odds": m.get("gg_odds", 0.0), "ng_odds": m.get("ng_odds", 0.0),
             "prediction": pred_class, "prediction_ou": "OVER 2.5", "ai_confidence": confidence,
-            "prediction_gg": pred_class_gg, "ai_confidence_gg": confidence_gg,
+            "prediction_gg": pred_class_gg, "ai_confidence_gg": confidence_gg, "model_valid": model_valid,
             "settled": False, "last_known_score": "0 - 0"
         })
     def get_pred_odds(m):
@@ -450,7 +454,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS matches (id INTEGER PRIMARY KEY AUTOI
 cursor.execute("CREATE TABLE IF NOT EXISTS weekly_accumulators (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, week TEXT, result_1x2 TEXT, result_ou TEXT)")
 cursor.execute("PRAGMA table_info(matches)")
 existing_columns = [row[1] for row in cursor.fetchall()]
-for col, col_type in [("prediction_ou", "TEXT"), ("prediction_ou_status", "TEXT"), ("prediction_gg", "TEXT"), ("over_15_odds", "REAL"), ("gg_odds", "REAL"), ("ng_odds", "REAL")]:
+for col, col_type in [("website_markets", "TEXT"), ("website_round", "TEXT"), ("confidence_gg", "REAL"), ("prediction_ou", "TEXT"), ("prediction_ou_status", "TEXT"), ("prediction_gg", "TEXT"), ("over_15_odds", "REAL"), ("gg_odds", "REAL"), ("ng_odds", "REAL")]:
     if col not in existing_columns: cursor.execute(f"ALTER TABLE matches ADD COLUMN {col} {col_type}")
 cursor.execute("PRAGMA table_info(weekly_accumulators)")
 acc_cols = [row[1] for row in cursor.fetchall()]
@@ -499,7 +503,7 @@ while True:
                     actual_gg = "GG" if hg > 0 and ag > 0 else "NG"
                     target["gg_status"] = "CORRECT" if actual_gg == target.get("prediction_gg") else "WRONG"
                     target["settled"] = True
-                    cursor.execute("UPDATE matches SET actual_result=?, prediction_status=?, prediction_ou_status=?, live_score=?, match_status=? WHERE week=? AND home_team=? AND away_team=?", (ao, target["status"], target["ou_status"], fs, "SETTLED", tracked_week, target["home_team"], target["away_team"]))
+                    cursor.execute("UPDATE matches SET actual_result=?, prediction_status=?, prediction_ou_status=?, live_score=?, match_status=? WHERE week=? AND home_team=? AND away_team=? AND website_round=?", (ao, target["status"], target["ou_status"], fs, "SETTLED", tracked_week, target["home_team"], target["away_team"], old_state.get("website_round")))
                     if target.get("is_shortlisted"): shortlisted_targets.append(target)
                 conn.commit()
                 if old_state.get("message_id") and shortlisted_targets: update_telegram_settlement(old_state.get("message_id"), tracked_week, shortlisted_targets)
@@ -557,13 +561,26 @@ while True:
             raw_matches = get_all_market_odds()
             if raw_matches:
                 scored, best_1x2_single, best_ou_single, best_gg_single = predict_with_ai(raw_matches)
+                # Freeze website picks before any result is available. This does not
+                # change the existing Telegram/extension strategies.
+                website_round = uuid.uuid4().hex
+                week_state["website_round"] = website_round
+                valid = [m for m in scored if m.get("model_valid")]
+                def rank(items, field, count):
+                    return sorted(items, key=lambda m: (-float(m[field]), m["home_team"], m["away_team"]))[:count]
+                selected_win = rank([m for m in valid if m["prediction"] in {"HOME", "AWAY"} and float(m[{"HOME": "home_odds", "AWAY": "away_odds"}[m["prediction"]]]) > 1.70], "ai_confidence", 1)
+                selected_gg = rank([m for m in valid if m["prediction_gg"] == "GG"], "ai_confidence_gg", 1)
+                selected_ng = rank([m for m in valid if m["prediction_gg"] == "NG"], "ai_confidence_gg", 1)
+                selected_over = rank([m for m in valid if m["prediction_gg"] == "GG" and m["ai_confidence_gg"] >= 60], "ai_confidence_gg", 2)
+                for m in scored:
+                    m["website_markets"] = [key for key, group in [("over", selected_over), ("gg", selected_gg), ("ng", selected_ng), ("win", selected_win)] if m in group]
                 current_live_targets = []
                 for m in scored:
                     m["is_1x2_target"] = m in best_1x2_single; m["is_ou_target"] = m in best_ou_single; m["is_gg_target"] = m in best_gg_single
                     m["is_shortlisted"] = m["is_1x2_target"] or m["is_ou_target"] or m["is_gg_target"]
                     if m["is_shortlisted"]: current_live_targets.append(m)
                     week_state["all_targets"].append(m)
-                    try: cursor.execute("INSERT INTO matches (home_team, away_team, home_odds, draw_odds, away_odds, over_15_odds, gg_odds, ng_odds, prediction, prediction_ou, prediction_gg, timestamp, week, live_score, match_status, is_shortlisted, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (m["home_team"], m["away_team"], m["home_odds"], m["draw_odds"], m["away_odds"], m["over_15_odds"], m["gg_odds"], m["ng_odds"], m["prediction"], "OVER 2.5", m["prediction_gg"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), current_week, "0 - 0", "UPCOMING", m["is_shortlisted"], m["ai_confidence"]))
+                    try: cursor.execute("INSERT INTO matches (home_team, away_team, home_odds, draw_odds, away_odds, over_15_odds, gg_odds, ng_odds, prediction, prediction_ou, prediction_gg, timestamp, week, live_score, match_status, is_shortlisted, confidence, confidence_gg, website_round, website_markets) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (m["home_team"], m["away_team"], m["home_odds"], m["draw_odds"], m["away_odds"], m["over_15_odds"], m["gg_odds"], m["ng_odds"], m["prediction"], "OVER 2.5", m["prediction_gg"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), current_week, "0 - 0", "UPCOMING", m["is_shortlisted"], m["ai_confidence"], m["ai_confidence_gg"] if m.get("model_valid") else None, website_round, json.dumps(m["website_markets"])))
                     except Exception: pass
                 conn.commit()
 

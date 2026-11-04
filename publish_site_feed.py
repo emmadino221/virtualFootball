@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -34,13 +35,14 @@ def build_snapshot(db_path=DB_PATH, source_id=SOURCE_ID, source_at=None):
     connection = sqlite3.connect(db_path, timeout=10)
     connection.row_factory = sqlite3.Row
     try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(matches)")}
+        optional = ["home_odds", "draw_odds", "away_odds", "confidence_gg", "website_round", "website_markets"]
+        extra = ", ".join(name if name in columns else f"NULL AS {name}" for name in optional)
+        where = "WHERE is_shortlisted = 1" if "website_markets" not in columns else "WHERE website_markets IS NOT NULL OR is_shortlisted = 1"
         rows = connection.execute(
-            """SELECT id, home_team, away_team, week, prediction, prediction_gg,
-                      confidence, timestamp, match_status, live_score
-               FROM matches
-               WHERE is_shortlisted = 1
-               ORDER BY id DESC
-               LIMIT 200"""
+            f"""SELECT id, home_team, away_team, week, prediction, prediction_gg,
+                      confidence, timestamp, match_status, live_score, {extra}
+               FROM matches {where} ORDER BY id DESC LIMIT 200"""
         ).fetchall()
     finally:
         connection.close()
@@ -51,6 +53,11 @@ def build_snapshot(db_path=DB_PATH, source_id=SOURCE_ID, source_at=None):
         pick = str(row["prediction"] or "").upper()
         btts = str(row["prediction_gg"] or "").upper()
         confidence = row["confidence"]
+        selected = json.loads(row["website_markets"]) if row["website_markets"] is not None else None
+        odds_column = {"HOME": "home_odds", "DRAW": "draw_odds", "AWAY": "away_odds"}.get(pick)
+        win_odds = float(row[odds_column]) if odds_column and row[odds_column] is not None else None
+        if win_odds is not None and (not math.isfinite(win_odds) or not 1 < win_odds <= 10000):
+            win_odds = None
         matches.append({
             "id": int(row["id"]),
             "home": str(row["home_team"] or ""),
@@ -60,6 +67,10 @@ def build_snapshot(db_path=DB_PATH, source_id=SOURCE_ID, source_at=None):
             "pick": pick if pick in {"HOME", "DRAW", "AWAY"} else None,
             "btts": btts if btts in {"GG", "NG"} else None,
             "confidence": float(confidence) if confidence is not None else None,
+            "selectedMarkets": selected,
+            "roundId": row["website_round"],
+            "winOdds": win_odds,
+            "bttsConfidence": float(row["confidence_gg"]) if row["confidence_gg"] is not None else None,
             "status": status,
             "score": row["live_score"] if status == "REPORTED" else None,
         })
