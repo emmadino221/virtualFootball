@@ -25,6 +25,8 @@ while True:
         
         over_result = subprocess.run([sys.executable, str(Path(__file__).with_name("train_model_over15.py"))], capture_output=True, text=True)
         print(over_result.stdout if over_result.returncode == 0 else over_result.stderr)
+        gg_odds_result = subprocess.run([sys.executable, str(Path(__file__).with_name("train_model_gg_odds.py"))], capture_output=True, text=True)
+        print(gg_odds_result.stdout if gg_odds_result.returncode == 0 else gg_odds_result.stderr)
 
         # Check if the training was successful
         if result.returncode == 0:

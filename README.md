@@ -35,6 +35,7 @@ round and nothing downstream chooses again.
 | `new.py` | The generator. Reads each round's fixtures and odds from Bet9ja with headless Chrome, scores them with the models, chooses the picks, settles them when scores arrive, sends Telegram messages, and serves the extension API. |
 | `publish_site_feed.py` | Reads `matches.db` and posts a signed snapshot to the website every 10 seconds. It passes the picks through unchanged. |
 | `over15_model.py`, `train_model_over15.py` | The Over 1.5 goals model and its trainer. The trained file `ai_brain_over15.pkl` is not in Git; it is created on the VPS. |
+| `gg_odds_model.py`, `train_model_gg_odds.py` | GG/NG model that uses only the 1X2 odds, and its trainer. When its file `ai_brain_gg_odds.pkl` (not in Git, created on the VPS) exists, it replaces the older GG/NG model. |
 | `train_model.py`, `train_model_gg.py` | Trainers for the Win model (`ai_brain.pkl`) and the GG/NG model (`ai_brain_gg.pkl`). Both model files are in Git. |
 | `evaluate_models.py` | Read-only report: how the published predictions have done and whether another model type would rank matches better. Changes nothing. |
 | `auto_trainer.py` | Retrains the models on a timer. It has no systemd service; it only runs if started by hand. |
@@ -112,6 +113,27 @@ the minimum: 1.65 by default, 1.40 for Over 1.5, or the value typed in the
 popup. The bot stops itself when it cannot find the market, the tab does not
 open, or a limit (take profit, stop loss, max loss streak) is reached.
 
+## What the history says (13 November 2026, 90,620 settled matches)
+
+Measured with `evaluate_models.py`:
+
+- **Nothing beats the bookmaker's odds.** For home wins, the plain odds predict
+  as well as every trained model. Team names and past form add nothing, so the
+  results appear to be drawn from the odds.
+- **Over 1.5** is at its ceiling: every model type scores the same. The two
+  picks both win in about 62% of rounds, so the double only pays when the
+  combined odds are above about 1.62.
+- **Under 1.5** (lowest Over confidence) wins about 28% of the time, so it only
+  pays at odds above about 3.6.
+- **GG / NG**: the older model's picks won 55.3% (GG) and 47.3% (NG). The
+  odds-only model reached about 57% and 54% on unseen matches, which is why it
+  replaced the older one. Break-even odds are about 1.75 for GG and 1.85 for NG.
+- **Win** picks won 47.8% at average odds 2.05: a return of 0.965 per 1 staked,
+  a loss of about 3.5%, close to the bookmaker's 5.2% margin.
+
+The recovery staking does not change these averages; it only changes when the
+losses arrive.
+
 ## Deploying a change
 
 Order matters when the feed format changes: **website first, then this
@@ -157,7 +179,8 @@ Known gaps in the backend:
 7. **A restart can lose one round.** The round in progress when the generator
    restarts may not be settled.
 8. **`auto_trainer.py` is not a service.** Models are only retrained when
-   someone runs it. `ai_brain_over15.pkl` must exist on the VPS.
+   someone runs it. `ai_brain_over15.pkl` and `ai_brain_gg_odds.pkl` must
+   exist on the VPS.
 9. **No automated test for `new.py`.** Only `publish_site_feed.py` has one
    (`test_publish_site_feed.py`). The extension has a simulation in
    `tests/extension_sim.cjs`.

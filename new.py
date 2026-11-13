@@ -1,6 +1,7 @@
 import json
 import uuid
 from over15_model import predict as predict_over15
+from gg_odds_model import predict as predict_gg_odds
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -31,6 +32,10 @@ AI_GG_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_GG_MODEL_PATH", BASE_DIR / "ai_bra
 AI_OVER15_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_OVER15_MODEL_PATH", BASE_DIR / "ai_brain_over15.pkl")).expanduser()
 try: ai_model_over15 = joblib.load(AI_OVER15_MODEL_PATH)
 except Exception: ai_model_over15 = None
+# Odds-only GG/NG model. When the file is missing the older team-and-form model is used.
+AI_GG_ODDS_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_GG_ODDS_MODEL_PATH", BASE_DIR / "ai_brain_gg_odds.pkl")).expanduser()
+try: ai_model_gg_odds = joblib.load(AI_GG_ODDS_MODEL_PATH)
+except Exception: ai_model_gg_odds = None
 
 GOOGLE_CREDENTIALS_FILE = Path(os.getenv("GOOGLE_CREDENTIALS_FILE", BASE_DIR / "credentials.json")).expanduser()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -465,6 +470,9 @@ def predict_with_ai(raw_matches):
         except Exception:
             model_valid = False
             pred_class, confidence = "HOME", 33.3; pred_class_gg, confidence_gg = "NG", 50.0
+        gg_chance = predict_gg_odds(ai_model_gg_odds, m)
+        if gg_chance is not None:
+            pred_class_gg = "GG" if gg_chance >= 50 else "NG"; confidence_gg = max(gg_chance, 100 - gg_chance)
         scored.append({
             "home_team": ht, "away_team": at, "home_odds": ho, "draw_odds": do, "away_odds": ao,
             "over_15_odds": m.get("over_15_odds", 0.0), "gg_odds": m.get("gg_odds", 0.0), "ng_odds": m.get("ng_odds", 0.0),
@@ -637,6 +645,10 @@ while True:
                 ai_model_over15 = joblib.load(AI_OVER15_MODEL_PATH)
             except Exception:
                 ai_model_over15 = None
+            try:
+                ai_model_gg_odds = joblib.load(AI_GG_ODDS_MODEL_PATH)
+            except Exception:
+                ai_model_gg_odds = None
 
         for parsed in get_live_scores_js():
             for target in week_state["all_targets"]:

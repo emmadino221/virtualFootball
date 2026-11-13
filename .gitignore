@@ -8,3 +8,4 @@ matches.db
 matches.db-shm
 matches.db-wal
 ai_brain_over15.pkl
+ai_brain_gg_odds.pkl
