@@ -26,7 +26,7 @@ const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg', 'NG': 'ng' };
 // menu, `find` locates it when the exact value is not there, `picks` is how many
 // selections the round needs, and `pick` matches the `for` attribute of the right label.
 const MARKETS = {
-    'OU': { name: 'Over 1.5', value: 'Over_Under_1_5', find: /over.{0,3}under.{0,3}1.?5/i, picks: 2, pick: /_over\d*$/i, fallbackIndex: 0 },
+    'OU': { name: 'Over 1.5', value: 'Over_Under_1_5', find: /^over.{0,3}under.{0,3}1.?5$/i, picks: 2, pick: /_over\d*$/i, fallbackIndex: 0 },
     '1X2': { name: 'Win', value: 'Match_Result', find: /match.{0,3}result|^1x2$/i, picks: 1 },
     'GG': { name: 'GG', value: 'GoalGoal_NoGoal', picks: 1, pick: /_gg$/i, fallbackIndex: 0 },
     'NG': { name: 'NG', value: 'GoalGoal_NoGoal', picks: 1, pick: /_ng$/i, fallbackIndex: 1 }
@@ -484,7 +484,8 @@ function findMarketValue(selectMenu, market) {
     if (options.length === 0) return market.value;
     const exact = options.find(option => option.value === market.value);
     if (exact) return exact.value;
-    const similar = market.find ? options.find(option => market.find.test(option.value) || market.find.test(option.textContent || '')) : null;
+    // Whole-name matches only: "HomeAwayScores_Over_Under_1_5" is a different market.
+    const similar = market.find ? options.find(option => market.find.test(option.value) || market.find.test((option.textContent || '').trim())) : null;
     return similar ? similar.value : null;
 }
 
