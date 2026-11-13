@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Auto Executor Bot",
-  "version": "2.5",
+  "version": "2.6",
   "description": "AI-driven betting automation with UI Control Panel.",
   "permissions": [
     "activeTab", 

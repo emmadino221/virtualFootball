@@ -27,7 +27,7 @@ const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg', 'NG': 'ng' };
 // selections the round needs, and `pick` matches the `for` attribute of the right label.
 const MARKETS = {
     'OU': { name: 'Over 1.5', value: 'Over_Under_1_5', find: /over.{0,3}under.{0,3}1.?5/i, picks: 2, pick: /_over\d*$/i, fallbackIndex: 0 },
-    '1X2': { name: 'Win', value: 'Match_Result', picks: 1 },
+    '1X2': { name: 'Win', value: 'Match_Result', find: /match.{0,3}result|^1x2$/i, picks: 1 },
     'GG': { name: 'GG', value: 'GoalGoal_NoGoal', picks: 1, pick: /_gg$/i, fallbackIndex: 0 },
     'NG': { name: 'NG', value: 'GoalGoal_NoGoal', picks: 1, pick: /_ng$/i, fallbackIndex: 1 }
 };
@@ -478,6 +478,10 @@ async function markWeekHandled(week) {
 // Picks the market in Bet9ja's market menu. Returns the option value, or null if absent.
 function findMarketValue(selectMenu, market) {
     const options = Array.from(selectMenu.options || []);
+    // Bet9ja's market control is not always a real dropdown with a readable option list.
+    // Then the known value is set directly; the picks are still checked against the market
+    // the rows actually show before anything is clicked.
+    if (options.length === 0) return market.value;
     const exact = options.find(option => option.value === market.value);
     if (exact) return exact.value;
     const similar = market.find ? options.find(option => market.find.test(option.value) || market.find.test(option.textContent || '')) : null;
@@ -587,7 +591,11 @@ async function executeBets(payload) {
     let marketValue = market.value;
     if (selectMenu) {
         marketValue = findMarketValue(selectMenu, market);
-        if (!marketValue) { await triggerCircuitBreaker(`${market.name} market not found on Bet9ja - no bet placed`); return; }
+        if (!marketValue) {
+            const seen = Array.from(selectMenu.options || []).map(option => option.value).join(', ').slice(0, 160);
+            await triggerCircuitBreaker(`${market.name} market not found on Bet9ja (menu has: ${seen}) - no bet placed`);
+            return;
+        }
         selectMenu.value = marketValue;
         selectMenu.dispatchEvent(new Event('change', { bubbles: true }));
         await sleep(2500);
