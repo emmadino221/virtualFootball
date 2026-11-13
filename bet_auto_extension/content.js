@@ -20,7 +20,7 @@ const POLLING_INTERVAL_MS = 3000;
 // A loss is only recovered by the next stake when the odds are at least M / (M - 1).
 const DEFAULT_MIN_ODDS = 1.65;
 // Two Over 1.5 legs rarely multiply to 1.65, so that market has its own lower default.
-const DEFAULT_MIN_ODDS_BY_MODE = { 'OU': 1.30 };
+const DEFAULT_MIN_ODDS_BY_MODE = { 'OU': 1.40 };
 const PENDING_TIMEOUT_MS = 15 * 60 * 1000;
 const WEEK_LOCK_MS = 10 * 60 * 1000;
 const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg', 'NG': 'ng', 'UN': 'un' };
