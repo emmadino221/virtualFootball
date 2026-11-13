@@ -14,13 +14,14 @@ document.addEventListener('DOMContentLoaded', () => {
         stopLoss: document.getElementById('sl-limit'),
         maxLossStreak: document.getElementById('max-streak-limit'),
         maxStake: document.getElementById('max-stake-limit'),
+        minOdds: document.getElementById('min-odds-limit'),
         chatId: document.getElementById('chat-id-input'),
         bettingMode: document.getElementById('betting-mode')
     };
     
     let isRunning = false;
 
-    chrome.storage.local.get(['botEnabled', 'licenseKey', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'maxStake', 'chatId', 'totalProfit', 'bettingMode'], (res) => {
+    chrome.storage.local.get(['botEnabled', 'licenseKey', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'maxStake', 'minOdds', 'chatId', 'totalProfit', 'bettingMode'], (res) => {
         isRunning = !!res.botEnabled;
         if (res.licenseKey !== undefined) inputs.licenseKey.value = res.licenseKey;
         if (res.baseStake !== undefined) inputs.baseStake.value = res.baseStake;
@@ -28,6 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (res.stopLoss !== undefined) inputs.stopLoss.value = res.stopLoss;
         if (res.maxLossStreak !== undefined) inputs.maxLossStreak.value = res.maxLossStreak;
         if (res.maxStake) inputs.maxStake.value = res.maxStake;
+        if (res.minOdds) inputs.minOdds.value = res.minOdds;
         if (res.chatId !== undefined) inputs.chatId.value = res.chatId;
         if (res.bettingMode !== undefined) inputs.bettingMode.value = res.bettingMode;
         
@@ -49,12 +51,18 @@ document.addEventListener('DOMContentLoaded', () => {
             stopLoss: parseFloat(inputs.stopLoss.value),
             maxLossStreak: parseInt(inputs.maxLossStreak.value),
             maxStake: parseFloat(inputs.maxStake.value) || 0,
+            minOdds: parseFloat(inputs.minOdds.value) || 0,
             chatId: inputs.chatId.value.trim(),
             bettingMode: inputs.bettingMode.value
         };
 
         if (!conf.licenseKey) {
             showAlert("⚠️ License Key is required.", true);
+            return;
+        }
+
+        if (conf.minOdds && conf.minOdds <= 1) {
+            showAlert("⚠️ Min Total Odds must be above 1.", true);
             return;
         }
 
@@ -72,9 +80,10 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({ 
             totalProfit: 0, pendingBet: null, winStreak: 0, maxWinStreak: 0, 
             maxLossStreakRec: 0, localLossStreak: 0, lastBetMark: null,
-            licenseKey: '', baseStake: '', takeProfit: '', stopLoss: '', maxLossStreak: '', maxStake: 0
+            licenseKey: '', baseStake: '', takeProfit: '', stopLoss: '', maxLossStreak: '', maxStake: 0, minOdds: 0
         });
         inputs.maxStake.value = '';
+        inputs.minOdds.value = '';
         
         inputs.licenseKey.value = '';
         inputs.baseStake.value = '';

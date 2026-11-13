@@ -14,10 +14,19 @@ const API_BASE_URL = 'https://159.65.25.30/virtual-api';
 
 const POLLING_INTERVAL_MS = 3000;
 // A loss is only recovered by the next stake when the odds are at least M / (M - 1).
-const MIN_ODDS = 1.65;
+const DEFAULT_MIN_ODDS = 1.65;
 const PENDING_TIMEOUT_MS = 15 * 60 * 1000;
 const WEEK_LOCK_MS = 10 * 60 * 1000;
-const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg' };
+const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg', 'NG': 'ng' };
+// The bot bets the picks the website publishes. `value` is Bet9ja's market in the market
+// menu, `find` locates it when the exact value is not there, `picks` is how many
+// selections the round needs, and `pick` matches the `for` attribute of the right label.
+const MARKETS = {
+    'OU': { name: 'Over 1.5', value: 'Over_Under_1_5', find: /over.{0,3}under.{0,3}1.?5/i, picks: 2, pick: /_over\d*$/i, fallbackIndex: 0 },
+    '1X2': { name: 'Win', value: 'Match_Result', picks: 1 },
+    'GG': { name: 'GG', value: 'GoalGoal_NoGoal', picks: 1, pick: /_gg$/i, fallbackIndex: 0 },
+    'NG': { name: 'NG', value: 'GoalGoal_NoGoal', picks: 1, pick: /_ng$/i, fallbackIndex: 1 }
+};
 
 function createOverlay() {
     const overlay = document.createElement('div');
@@ -339,20 +348,18 @@ async function fetchAIData() {
         const reCheck = await chrome.storage.local.get(['bettingMode']);
         const finalMode = reCheck.bettingMode || 'OU';
 
-        let activeTargets = [];
-        if (finalMode === 'OU') activeTargets = data.targets_ou;
-        else if (finalMode === '1X2') activeTargets = data.targets_1x2;
-        else if (finalMode === 'GG') activeTargets = data.targets_gg;
+        const activeTargets = data.picks && Array.isArray(data.picks[finalMode]) ? data.picks[finalMode] : [];
 
         return {
             ok: true,
-            targets: activeTargets || [],
+            targets: activeTargets,
             mode: finalMode,
             readyWeek: data.ready_week || null,
             roundId: data.round_id || null,
             results: Array.isArray(data.results) ? data.results : [],
-            // Older servers do not report rounds; without them a bet cannot be settled safely.
-            serverSupported: 'round_id' in data && 'results' in data
+            // Older servers do not report rounds or website picks; without them a bet cannot
+            // be chosen or settled safely.
+            serverSupported: 'round_id' in data && 'results' in data && !!data.picks
         };
     } catch (error) { return empty; }
 }
@@ -453,23 +460,36 @@ async function markWeekHandled(week) {
     await chrome.storage.local.set({ lastBetMark: { week, at: Date.now() } });
 }
 
-function findSelection(row, target, mode) {
-    if (mode === 'OU') {
-        const element = row.querySelector("label[for*='Over_Under_2_5'][for$='_over2']");
-        return element ? { element, tag: '>2.5' } : null;
-    }
+// Picks the market in Bet9ja's market menu. Returns the option value, or null if absent.
+function findMarketValue(selectMenu, market) {
+    const options = Array.from(selectMenu.options || []);
+    const exact = options.find(option => option.value === market.value);
+    if (exact) return exact.value;
+    const similar = market.find ? options.find(option => market.find.test(option.value) || market.find.test(option.textContent || '')) : null;
+    return similar ? similar.value : null;
+}
+
+function findSelection(row, target, mode, marketValue) {
+    const market = MARKETS[mode];
+    const inputs = row.querySelectorAll('input.checkbox_bets');
     if (mode === '1X2') {
-        const inputs = row.querySelectorAll('input.checkbox_bets');
-        if (inputs.length < 3) return null;
-        const targetInput = target.prediction === "HOME" ? inputs[0] : target.prediction === "DRAW" ? inputs[1] : inputs[2];
-        const element = targetInput ? row.querySelector(`label[for='${targetInput.id}']`) : null;
-        return element ? { element, tag: target.prediction } : null;
+        if (inputs.length < 3 || !['HOME', 'AWAY'].includes(target.prediction)) return null;
+        const targetInput = target.prediction === "HOME" ? inputs[0] : inputs[2];
+        const element = row.querySelector(`label[for='${targetInput.id}']`);
+        return isVisible(element) ? { element, tag: target.prediction } : null;
     }
-    if (mode === 'GG') {
-        const element = row.querySelector("label[for$='_gg']");
-        return element ? { element, tag: 'GG' } : null;
+    // Two-way markets: prefer the label named for this outcome, and only fall back to the
+    // position when the row shows exactly the two outcomes of the chosen market.
+    let labels = Array.from(row.querySelectorAll('label[for]')).filter(label => isVisible(label) && market.pick.test(label.getAttribute('for') || ''));
+    const ofMarket = labels.filter(label => (label.getAttribute('for') || '').includes(marketValue));
+    if (ofMarket.length) labels = ofMarket;
+    let element = labels.length === 1 ? labels[0] : null;
+    const showsThisMarket = Array.from(inputs).every(input => String(input.id || '').includes(marketValue));
+    if (!element && labels.length === 0 && inputs.length === 2 && showsThisMarket) {
+        const fallback = row.querySelector(`label[for='${inputs[market.fallbackIndex].id}']`);
+        if (isVisible(fallback)) element = fallback;
     }
-    return null;
+    return element ? { element, tag: market.name } : null;
 }
 
 async function executeBets(payload) {
@@ -477,7 +497,7 @@ async function executeBets(payload) {
 
     const stillPending = await settlePendingBet(payload.results);
 
-    const storage = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'maxStake', 'totalProfit', 'localLossStreak', 'lastBetMark', 'licenseKey']);
+    const storage = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'maxStake', 'minOdds', 'totalProfit', 'localLossStreak', 'lastBetMark', 'licenseKey']);
     if (!storage.botEnabled) return;
     if (storage.baseStake === undefined || storage.baseStake === '' ||
         storage.maxLossStreak === undefined || storage.maxLossStreak === '' ||
@@ -491,7 +511,8 @@ async function executeBets(payload) {
         takeProfit: parseFloat(storage.takeProfit) || 0,
         stopLoss: Math.abs(parseFloat(storage.stopLoss)) || 0,
         maxLossStreak: parseInt(storage.maxLossStreak) || 0,
-        maxStake: parseFloat(storage.maxStake) || 0
+        maxStake: parseFloat(storage.maxStake) || 0,
+        minOdds: parseFloat(storage.minOdds) > 1 ? parseFloat(storage.minOdds) : DEFAULT_MIN_ODDS
     };
     if (!(conf.baseStake > 0)) { await triggerCircuitBreaker("Invalid Base Stake"); return; }
 
@@ -514,8 +535,15 @@ async function executeBets(payload) {
 
     const targets = payload.targets;
     const targetMode = payload.mode;
-    if (!payload.roundId || !payload.readyWeek || normalizeWeek(payload.readyWeek) !== normalizeWeek(currentWeekStr) || targets.length === 0) {
+    const market = MARKETS[targetMode];
+    if (!market) { await triggerCircuitBreaker(`Unknown mode ${targetMode}`); return; }
+    if (!payload.roundId || !payload.readyWeek || normalizeWeek(payload.readyWeek) !== normalizeWeek(currentWeekStr)) {
         updateOverlayStatus('Awaiting Signals...', 'info');
+        return;
+    }
+    // The website publishes no pick for a market when the round does not qualify.
+    if (targets.length !== market.picks) {
+        updateOverlayStatus(`No ${market.name} pick this round`, 'info');
         return;
     }
 
@@ -531,35 +559,50 @@ async function executeBets(payload) {
     }
     if (!dataLoaded) { updateOverlayStatus('Timeout', 'error'); return; }
 
-    const marketValue = { 'OU': 'Over_Under_2_5', '1X2': 'Match_Result', 'GG': 'GoalGoal_NoGoal' }[targetMode];
     const selectMenu = doc.getElementById('bet-select-market');
-    if (selectMenu && marketValue) { selectMenu.value = marketValue; selectMenu.dispatchEvent(new Event('change', { bubbles: true })); await sleep(2500); }
+    let marketValue = market.value;
+    if (selectMenu) {
+        marketValue = findMarketValue(selectMenu, market);
+        if (!marketValue) { await triggerCircuitBreaker(`${market.name} market not found on Bet9ja - no bet placed`); return; }
+        selectMenu.value = marketValue;
+        selectMenu.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(2500);
+    } else if (targetMode !== '1X2') {
+        await triggerCircuitBreaker('Market menu not found - no bet placed');
+        return;
+    }
 
-    let pick = null;
-    for (const row of doc.querySelectorAll(SELECTORS.tableRow)) {
-        const textContent = row.innerText.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-        for (const target of targets) {
+    // Find every selection first; nothing is clicked unless the whole pick is available.
+    const picks = [];
+    const allRows = Array.from(doc.querySelectorAll(SELECTORS.tableRow));
+    for (const target of targets) {
+        for (const row of allRows) {
+            const textContent = row.innerText.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
             if (!textContent.includes(target.home_team) || !textContent.includes(target.away_team)) continue;
-            const selection = findSelection(row, target, targetMode);
-            if (selection) { pick = { ...selection, target }; break; }
+            const selection = findSelection(row, target, targetMode, marketValue);
+            if (selection && !picks.some(p => p.element === selection.element)) { picks.push({ ...selection, target }); break; }
         }
-        if (pick) break;
     }
 
     // From here the week is finished for this browser, whether or not a bet goes through.
     await markWeekHandled(currentWeekStr);
 
-    if (!pick) {
-        updateOverlayStatus('Mismatch: 0/1', 'error');
+    if (picks.length !== market.picks) {
+        updateOverlayStatus(`Mismatch: ${picks.length}/${market.picks}`, 'error');
         addLogEntry('Error: Targets not found/Odds disabled');
         return;
     }
 
-    const oddsValue = parseFloat(pick.element.innerText || pick.element.textContent);
-    if (isNaN(oddsValue) || oddsValue < MIN_ODDS) {
-        addMatchToOverlay(pick.target.home_team, pick.target.away_team, `[${pick.tag}] ${isNaN(oddsValue) ? '-' : oddsValue}`, 'error');
+    let oddsValue = 1;
+    for (const p of picks) {
+        p.odds = parseFloat(p.element.innerText || p.element.textContent);
+        oddsValue *= p.odds;
+    }
+    oddsValue = parseFloat(oddsValue.toFixed(2));
+    if (isNaN(oddsValue) || picks.some(p => !(p.odds > 1)) || oddsValue < conf.minOdds) {
+        for (const p of picks) addMatchToOverlay(p.target.home_team, p.target.away_team, `[${p.tag}] ${isNaN(p.odds) ? '-' : p.odds}`, 'error');
         updateOverlayStatus('Skipped: odds too low', 'info');
-        addLogEntry(`Skipped ${currentWeekStr}: odds below ${MIN_ODDS}`);
+        addLogEntry(`Skipped ${currentWeekStr}: odds ${isNaN(oddsValue) ? '-' : oddsValue} below ${conf.minOdds}`);
         return;
     }
 
@@ -572,9 +615,11 @@ async function executeBets(payload) {
     if (conf.stopLoss > 0 && currentTotal - finalStake < -conf.stopLoss) { await triggerCircuitBreaker(`Next stake ₦${finalStake} would pass Stop Loss`); return; }
 
     updateOverlayStatus('Executing...', 'info');
-    simulateHumanClick(pick.element);
-    addMatchToOverlay(pick.target.home_team, pick.target.away_team, `[${pick.tag}] ${oddsValue}`, 'success');
-    await sleep(2000);
+    for (const p of picks) {
+        simulateHumanClick(p.element);
+        addMatchToOverlay(p.target.home_team, p.target.away_team, `[${p.tag}] ${p.odds}`, 'success');
+        await sleep(2000);
+    }
 
     updateFinancials(oddsValue.toFixed(2), finalStake.toFixed(2), expectedReturn.toFixed(2), pureProfit.toFixed(2));
     updateOverlayStatus(`Placing Bet`, 'info');
