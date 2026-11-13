@@ -26,10 +26,10 @@ const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg', 'NG': 'ng' };
 // menu, `find` locates it when the exact value is not there, `picks` is how many
 // selections the round needs, and `pick` matches the `for` attribute of the right label.
 const MARKETS = {
-    'OU': { name: 'Over 1.5', value: 'Over_Under_1_5', find: /^over.{0,3}under.{0,3}1.?5$/i, picks: 2, pick: /_over\d*$/i, fallbackIndex: 0 },
+    'OU': { name: 'Over 1.5', value: 'Over_Under_1_5', find: /^over.{0,3}under.{0,3}1.?5$/i, picks: 2, pick: /(^|_)over[\d_]*$/i, fallbackIndex: 0 },
     '1X2': { name: 'Win', value: 'Match_Result', find: /match.{0,3}result|^1x2$/i, picks: 1 },
-    'GG': { name: 'GG', value: 'GoalGoal_NoGoal', picks: 1, pick: /_gg$/i, fallbackIndex: 0 },
-    'NG': { name: 'NG', value: 'GoalGoal_NoGoal', picks: 1, pick: /_ng$/i, fallbackIndex: 1 }
+    'GG': { name: 'GG', value: 'GoalGoal_NoGoal', picks: 1, pick: /(^|_)(gg|goalgoal|yes)$/i, fallbackIndex: 0 },
+    'NG': { name: 'NG', value: 'GoalGoal_NoGoal', picks: 1, pick: /(^|_)(ng|nogoal|no)$/i, fallbackIndex: 1 }
 };
 
 function createOverlay() {
@@ -489,22 +489,51 @@ function findMarketValue(selectMenu, market) {
     return similar ? similar.value : null;
 }
 
+// Match Result, Goal Goal/No Goal and Over/Under 1.5 are tabs above the table, not entries
+// of the market menu. Opens the tab and returns true once Bet9ja marks it selected.
+async function openMarketTab(tab) {
+    const selected = () => !!tab.parentElement && tab.parentElement.getAttribute('aria-selected') === 'true';
+    if (selected()) return true;
+    simulateHumanClick(tab);
+    for (let i = 0; i < 16; i++) {
+        await sleep(250);
+        if (selected()) { await sleep(500); return true; }
+    }
+    return false;
+}
+
+const inputMarket = input => (input.dataset && input.dataset.marketid) || '';
+const inputOutcome = input => (input.dataset && input.dataset.oddid) || '';
+
 function findSelection(row, target, mode, marketValue) {
     const market = MARKETS[mode];
-    const inputs = row.querySelectorAll('input.checkbox_bets');
+    const inputs = Array.from(row.querySelectorAll('input.checkbox_bets'));
+    // Every market's rows sit in the page at once (one hidden panel per tab), so a row only
+    // counts when Bet9ja itself tags all its selections with the wanted market.
+    if (inputs.some(inputMarket) && !inputs.every(input => inputMarket(input) === marketValue)) return null;
     if (mode === '1X2') {
         if (inputs.length < 3 || !['HOME', 'AWAY'].includes(target.prediction)) return null;
-        const targetInput = target.prediction === "HOME" ? inputs[0] : inputs[2];
+        let targetInput = target.prediction === "HOME" ? inputs[0] : inputs[2];
+        if (inputs.some(inputOutcome)) {
+            const named = inputs.filter(input => inputOutcome(input).toUpperCase() === target.prediction);
+            if (named.length !== 1) return null;
+            targetInput = named[0];
+        }
         const element = row.querySelector(`label[for='${targetInput.id}']`);
         return isVisible(element) ? { element, tag: target.prediction } : null;
     }
-    // Two-way markets: prefer the label named for this outcome, and only fall back to the
+    // Two-way markets: prefer the selection named for this outcome, and only fall back to the
     // position when the row shows exactly the two outcomes of the chosen market.
+    const named = inputs.filter(input => market.pick.test(inputOutcome(input)));
+    if (named.length === 1) {
+        const element = row.querySelector(`label[for='${named[0].id}']`);
+        return isVisible(element) ? { element, tag: market.name } : null;
+    }
     let labels = Array.from(row.querySelectorAll('label[for]')).filter(label => isVisible(label) && market.pick.test(label.getAttribute('for') || ''));
     const ofMarket = labels.filter(label => (label.getAttribute('for') || '').includes(marketValue));
     if (ofMarket.length) labels = ofMarket;
     let element = labels.length === 1 ? labels[0] : null;
-    const showsThisMarket = Array.from(inputs).every(input => String(input.id || '').includes(marketValue));
+    const showsThisMarket = inputs.every(input => String(input.id || '').includes(marketValue));
     if (!element && labels.length === 0 && inputs.length === 2 && showsThisMarket) {
         const fallback = row.querySelector(`label[for='${inputs[market.fallbackIndex].id}']`);
         if (isVisible(fallback)) element = fallback;
@@ -589,8 +618,14 @@ async function executeBets(payload) {
     if (!dataLoaded) { updateOverlayStatus('Timeout', 'error'); return; }
 
     const selectMenu = doc.getElementById('bet-select-market');
+    const marketTab = doc.querySelector(`#tabs-list-market a[data-value="${market.value}"]`);
     let marketValue = market.value;
-    if (selectMenu) {
+    if (marketTab) {
+        if (!(await openMarketTab(marketTab))) {
+            await triggerCircuitBreaker(`${market.name} tab did not open on Bet9ja - no bet placed`);
+            return;
+        }
+    } else if (selectMenu) {
         marketValue = findMarketValue(selectMenu, market);
         if (!marketValue) {
             const seen = Array.from(selectMenu.options || []).map(option => option.value).join(', ').slice(0, 160);
@@ -622,7 +657,8 @@ async function executeBets(payload) {
 
     if (picks.length !== market.picks) {
         updateOverlayStatus(`Mismatch: ${picks.length}/${market.picks}`, 'error');
-        addLogEntry('Error: Targets not found/Odds disabled');
+        const seen = Array.from(doc.querySelectorAll(`input.checkbox_bets[data-marketid="${marketValue}"]`)).slice(0, 3).map(input => input.id).join(', ');
+        addLogEntry(`Error: Targets not found/Odds disabled${seen ? ` (page has: ${seen})` : ''}`);
         return;
     }
 
