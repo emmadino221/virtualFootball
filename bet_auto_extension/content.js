@@ -9,10 +9,15 @@ const SELECTORS = {
     closeTicketBtn: "#button_sent-ticket-close"      
 };
 
+// 🔴 CHANGE THIS IP ADDRESS TO MATCH WHERE YOUR PYTHON SCRIPT IS RUNNING
 const API_BASE_URL = 'https://159.65.25.30/virtual-api';
 
 const POLLING_INTERVAL_MS = 3000;
-let lastBetWeek = null;
+// A loss is only recovered by the next stake when the odds are at least M / (M - 1).
+const MIN_ODDS = 1.65;
+const PENDING_TIMEOUT_MS = 15 * 60 * 1000;
+const WEEK_LOCK_MS = 10 * 60 * 1000;
+const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg' };
 
 function createOverlay() {
     const overlay = document.createElement('div');
@@ -271,13 +276,14 @@ function getIframeDoc() {
 }
 
 async function fetchAIData() {
+    const empty = { ok: false, targets: [], mode: 'OU', readyWeek: null, roundId: null, results: [], serverSupported: true };
     try {
-        const st = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'totalProfit', 'bettingMode', 'licenseKey']);
+        const st = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'totalProfit', 'bettingMode', 'licenseKey', 'chatId']);
         const currentMode = st.bettingMode || 'OU';
-        
+
         const response = await fetch(`${API_BASE_URL}/sync`, {
             method: 'POST',
-            headers: { 
+            headers: {
                 'Content-Type': 'application/json',
                 'X-License-Key': st.licenseKey || ''
             },
@@ -287,14 +293,16 @@ async function fetchAIData() {
                 takeProfit: st.takeProfit || 0,
                 stopLoss: st.stopLoss || 0,
                 totalProfit: st.totalProfit || 0,
-                bettingMode: currentMode
+                bettingMode: currentMode,
+                chatId: st.chatId || ''
             })
         });
 
         if (response.status === 401) {
-            await triggerCircuitBreaker("Invalid License!");
-            return { targets: [], pythonLossStreak: 0, mode: 'OU' };
+            if (st.botEnabled) await triggerCircuitBreaker("Invalid License!");
+            return empty;
         }
+        if (!response.ok) return empty;
 
         const data = await response.json();
 
@@ -305,7 +313,7 @@ async function fetchAIData() {
                     updateOverlayStatus('🛑 STOPPED', 'error');
                     addLogEntry('Remote: Kill-Switch Activated');
                 } else if (cmd.type === 'START') {
-                    await chrome.storage.local.set({ botEnabled: true, localLossStreak: 0 }); 
+                    await chrome.storage.local.set({ botEnabled: true, localLossStreak: 0 });
                     updateOverlayStatus('🟢 RUNNING', 'success');
                     addLogEntry('Remote: Bot Started');
                 } else if (cmd.type === 'STAKE') {
@@ -330,37 +338,33 @@ async function fetchAIData() {
 
         const reCheck = await chrome.storage.local.get(['bettingMode']);
         const finalMode = reCheck.bettingMode || 'OU';
-        
+
         let activeTargets = [];
-        let activeStreak = 0;
-        if (finalMode === 'OU') { activeTargets = data.targets_ou; activeStreak = data.loss_streak_ou; }
-        else if (finalMode === '1X2') { activeTargets = data.targets_1x2; activeStreak = data.loss_streak_1x2; }
-        else if (finalMode === 'GG') { activeTargets = data.targets_gg; activeStreak = data.loss_streak_gg; }
+        if (finalMode === 'OU') activeTargets = data.targets_ou;
+        else if (finalMode === '1X2') activeTargets = data.targets_1x2;
+        else if (finalMode === 'GG') activeTargets = data.targets_gg;
 
-        return { targets: activeTargets || [], pythonLossStreak: activeStreak || 0, mode: finalMode };
-    } catch (error) { return { targets: [], pythonLossStreak: 0, mode: 'OU' }; }
-}
-
-async function isWeekReady() {
-    try {
-        const st = await chrome.storage.local.get(['licenseKey']);
-        const response = await fetch(`${API_BASE_URL}/is_week_ready`, {
-            headers: { 'X-License-Key': st.licenseKey || '' }
-        });
-        if (response.status === 401) return null;
-        const data = await response.json();
-        return data.is_ready ? data.ready_week : null;
-    } catch (error) { return null; }
+        return {
+            ok: true,
+            targets: activeTargets || [],
+            mode: finalMode,
+            readyWeek: data.ready_week || null,
+            roundId: data.round_id || null,
+            results: Array.isArray(data.results) ? data.results : [],
+            // Older servers do not report rounds; without them a bet cannot be settled safely.
+            serverSupported: 'round_id' in data && 'results' in data
+        };
+    } catch (error) { return empty; }
 }
 
 function normalizeWeek(weekStr) {
-    const match = weekStr.match(/(\d+)/);
-    return match ? match[1] : weekStr;
+    const match = String(weekStr).match(/(\d+)/);
+    return match ? match[1] : String(weekStr);
 }
 
 function simulateHumanClick(element) {
     if (!element) return false;
-    element.style.border = "2px solid #38bdf8"; 
+    element.style.border = "2px solid #38bdf8";
     element.dispatchEvent(new MouseEvent('click', { view: window, bubbles: true, cancelable: true }));
     element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
@@ -368,235 +372,248 @@ function simulateHumanClick(element) {
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const isVisible = (element) => !!element && element.getClientRects().length > 0;
+
+async function waitForVisible(doc, selector, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const element = doc.querySelector(selector);
+        if (isVisible(element)) return element;
+        await sleep(250);
+    }
+    return null;
+}
 
 async function triggerCircuitBreaker(reason) {
     await chrome.storage.local.set({ botEnabled: false });
     updateOverlayStatus(`STOPPED: ${reason}`, 'error');
-    addLogEntry(`🛑 CIRCUIT BREAKER TRIGGERED`);
+    addLogEntry(`🛑 STOPPED: ${reason}`);
+}
+
+// Settles the bet this browser actually placed, using the result of the exact round it was
+// placed on. Returns true while that result is still outstanding.
+async function settlePendingBet(results) {
+    const st = await chrome.storage.local.get(['pendingBet', 'totalProfit', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'localLossStreak', 'chatId', 'licenseKey']);
+    const bet = st.pendingBet;
+    if (!bet) return false;
+
+    const entry = bet.roundId ? results.find(r => r.round_id === bet.roundId) : null;
+    const outcome = entry ? entry[RESULT_KEYS[bet.mode]] : null;
+
+    if (outcome !== 'WIN' && outcome !== 'LOSS') {
+        const waiting = !entry && bet.placedAt && Date.now() - bet.placedAt < PENDING_TIMEOUT_MS;
+        if (waiting) return true;
+        await chrome.storage.local.set({ pendingBet: null });
+        addLogEntry(`Result unknown for ${bet.week || 'last bet'} - not counted, check Bet9ja`);
+        return false;
+    }
+
+    let currentTotal = st.totalProfit || 0;
+    let wStrk = st.winStreak || 0;
+    let mWStrk = st.maxWinStreak || 0;
+    let mLStrk = st.maxLossStreakRec || 0;
+    let lossStreak = st.localLossStreak || 0;
+
+    if (outcome === 'WIN') {
+        currentTotal += bet.profit;
+        addLogEntry(`WON: +₦${bet.profit.toFixed(2)}`);
+        wStrk++;
+        if (wStrk > mWStrk) mWStrk = wStrk;
+        lossStreak = 0;
+    } else {
+        currentTotal -= bet.stake;
+        addLogEntry(`LOST: -₦${bet.stake.toFixed(2)}`);
+        wStrk = 0;
+        lossStreak++;
+        if (lossStreak > mLStrk) mLStrk = lossStreak;
+    }
+
+    await chrome.storage.local.set({
+        totalProfit: currentTotal,
+        pendingBet: null,
+        winStreak: wStrk,
+        maxWinStreak: mWStrk,
+        maxLossStreakRec: mLStrk,
+        localLossStreak: lossStreak
+    });
+    updateOverlayTotalProfit(currentTotal);
+
+    if (st.chatId && st.licenseKey) {
+        fetch(`${API_BASE_URL}/send_receipt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-License-Key': st.licenseKey },
+            body: JSON.stringify({ chat_id: st.chatId, result: outcome, stake: bet.stake, profit: bet.profit, net_profit: currentTotal, win_streak: wStrk, loss_streak: lossStreak, max_win_streak: mWStrk, max_loss_streak: mLStrk })
+        }).catch(e => console.log("Telegram Receipt Error:", e));
+    }
+    return false;
+}
+
+// Remembered in storage so reloading the page cannot bet the same week twice.
+async function markWeekHandled(week) {
+    await chrome.storage.local.set({ lastBetMark: { week, at: Date.now() } });
+}
+
+function findSelection(row, target, mode) {
+    if (mode === 'OU') {
+        const element = row.querySelector("label[for*='Over_Under_2_5'][for$='_over2']");
+        return element ? { element, tag: '>2.5' } : null;
+    }
+    if (mode === '1X2') {
+        const inputs = row.querySelectorAll('input.checkbox_bets');
+        if (inputs.length < 3) return null;
+        const targetInput = target.prediction === "HOME" ? inputs[0] : target.prediction === "DRAW" ? inputs[1] : inputs[2];
+        const element = targetInput ? row.querySelector(`label[for='${targetInput.id}']`) : null;
+        return element ? { element, tag: target.prediction } : null;
+    }
+    if (mode === 'GG') {
+        const element = row.querySelector("label[for$='_gg']");
+        return element ? { element, tag: 'GG' } : null;
+    }
+    return null;
 }
 
 async function executeBets(payload) {
-    const targets = payload.targets;
-    const pythonLossStreak = payload.pythonLossStreak; 
-    const targetMode = payload.mode; 
+    if (!payload.ok) return;
 
-    if (targets.length === 0) return;
+    const stillPending = await settlePendingBet(payload.results);
 
-    let conf = { baseStake: null, takeProfit: null, stopLoss: null, maxLossStreak: null, chatId: "", licenseKey: "" };
-    try {
-        const storage = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'chatId', 'licenseKey']);
-        if (!storage.botEnabled) return; 
-        if (storage.baseStake === undefined || storage.baseStake === '' || 
-            storage.maxLossStreak === undefined || storage.maxLossStreak === '' ||
-            !storage.licenseKey) {
-            await triggerCircuitBreaker("Setup Missing");
-            return;
-        }
+    const storage = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'maxStake', 'totalProfit', 'localLossStreak', 'lastBetMark', 'licenseKey']);
+    if (!storage.botEnabled) return;
+    if (storage.baseStake === undefined || storage.baseStake === '' ||
+        storage.maxLossStreak === undefined || storage.maxLossStreak === '' ||
+        !storage.licenseKey) {
+        await triggerCircuitBreaker("Setup Missing");
+        return;
+    }
 
-        conf.baseStake = parseFloat(storage.baseStake);
-        conf.takeProfit = parseFloat(storage.takeProfit);
-        conf.stopLoss = parseFloat(storage.stopLoss);
-        conf.maxLossStreak = parseInt(storage.maxLossStreak);
-        conf.licenseKey = storage.licenseKey;
-        if (storage.chatId) conf.chatId = storage.chatId;
-    } catch (e) { return; }
+    const conf = {
+        baseStake: parseFloat(storage.baseStake),
+        takeProfit: parseFloat(storage.takeProfit) || 0,
+        stopLoss: Math.abs(parseFloat(storage.stopLoss)) || 0,
+        maxLossStreak: parseInt(storage.maxLossStreak) || 0,
+        maxStake: parseFloat(storage.maxStake) || 0
+    };
+    if (!(conf.baseStake > 0)) { await triggerCircuitBreaker("Invalid Base Stake"); return; }
+
+    if (!payload.serverSupported) { updateOverlayStatus('Server update required', 'error'); return; }
+    if (stillPending) { updateOverlayStatus('Bet placed - awaiting result', 'info'); return; }
+
+    const currentTotal = storage.totalProfit || 0;
+    const lossStreak = storage.localLossStreak || 0;
+    if (conf.takeProfit > 0 && currentTotal >= conf.takeProfit) { await triggerCircuitBreaker(`Target Reached (+₦${conf.takeProfit})`); return; }
+    if (conf.stopLoss > 0 && currentTotal <= -conf.stopLoss) { await triggerCircuitBreaker(`Stop Loss Hit (-₦${conf.stopLoss})`); return; }
+    if (conf.maxLossStreak > 0 && lossStreak >= conf.maxLossStreak) { await triggerCircuitBreaker(`Max Loss Streak (${conf.maxLossStreak})`); return; }
 
     const doc = getIframeDoc();
     const weekEl = doc.querySelector(SELECTORS.currentWeek);
     if (!weekEl) return;
     const currentWeekStr = weekEl.innerText.trim();
-    
-    if (currentWeekStr !== lastBetWeek) {
+
+    const mark = storage.lastBetMark;
+    if (mark && mark.week === currentWeekStr && Date.now() - mark.at < WEEK_LOCK_MS) return;
+
+    const targets = payload.targets;
+    const targetMode = payload.mode;
+    if (!payload.roundId || !payload.readyWeek || normalizeWeek(payload.readyWeek) !== normalizeWeek(currentWeekStr) || targets.length === 0) {
         updateOverlayStatus('Awaiting Signals...', 'info');
-        try {
-            const readyWeek = await isWeekReady();
-            const normalizedReady = readyWeek ? normalizeWeek(readyWeek) : null;
-            const normalizedCurrent = normalizeWeek(currentWeekStr);
-            if (!normalizedReady || normalizedReady !== normalizedCurrent) return;
-        } catch (e) { return; }
-        
-        const st = await chrome.storage.local.get(['pendingBet', 'totalProfit', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'localLossStreak']);
-        let currentTotal = st.totalProfit || 0;
-        let wStrk = st.winStreak || 0;
-        let mWStrk = st.maxWinStreak || 0;
-        let mLStrk = st.maxLossStreakRec || 0;
-        let currentLocalStreak = st.localLossStreak || 0; 
-
-        if (st.pendingBet) {
-            let resStr = "LOSS";
-            if (pythonLossStreak === 0) { 
-                currentTotal += st.pendingBet.profit;
-                addLogEntry(`WON: +₦${st.pendingBet.profit.toFixed(2)}`);
-                resStr = "WIN";
-                wStrk++;
-                if (wStrk > mWStrk) mWStrk = wStrk;
-                currentLocalStreak = 0; 
-            } else { 
-                currentTotal -= st.pendingBet.stake;
-                addLogEntry(`LOST: -₦${st.pendingBet.stake.toFixed(2)}`);
-                resStr = "LOSS";
-                wStrk = 0;
-                currentLocalStreak++; 
-                if (currentLocalStreak > mLStrk) mLStrk = currentLocalStreak;
-            }
-            
-            await chrome.storage.local.set({ 
-                totalProfit: currentTotal, 
-                pendingBet: null, 
-                winStreak: wStrk, 
-                maxWinStreak: mWStrk, 
-                maxLossStreakRec: mLStrk,
-                localLossStreak: currentLocalStreak 
-            });
-            updateOverlayTotalProfit(currentTotal);
-
-            if (conf.chatId) {
-                fetch(`${API_BASE_URL}/send_receipt`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-License-Key': conf.licenseKey },
-                    body: JSON.stringify({ chat_id: conf.chatId, result: resStr, stake: st.pendingBet.stake, profit: st.pendingBet.profit, net_profit: currentTotal, win_streak: wStrk, loss_streak: currentLocalStreak, max_win_streak: mWStrk, max_loss_streak: mLStrk })
-                }).catch(e => console.log("Telegram Receipt Error:", e));
-            }
-        }
-
-        document.getElementById('matches-list').innerHTML = '';
-        updateFinancials("0.00", "0.00", "0.00", "0.00");
-        
-        if (currentTotal >= conf.takeProfit && conf.takeProfit > 0) { await triggerCircuitBreaker(`Target Reached (+₦${conf.takeProfit})`); return; }
-        if (currentTotal <= -Math.abs(conf.stopLoss) && conf.stopLoss > 0) { await triggerCircuitBreaker(`Stop Loss Hit (-₦${conf.stopLoss})`); return; }
-        if (currentLocalStreak >= conf.maxLossStreak && conf.maxLossStreak > 0) { await triggerCircuitBreaker(`Max Loss Streak (${conf.maxLossStreak})`); return; }
-
-        updateOverlayStatus(`Locking Targets [${targetMode}]`, 'success');
-        updateOverlayWeek(currentWeekStr);
+        return;
     }
-    
-    if (currentWeekStr === lastBetWeek) return; 
 
-    updateOverlayStatus('Executing...', 'info');
+    document.getElementById('matches-list').innerHTML = '';
+    updateFinancials("0.00", "0.00", "0.00", "0.00");
+    updateOverlayWeek(currentWeekStr);
+    updateOverlayStatus(`Locking Targets [${targetMode}]`, 'success');
 
     let dataLoaded = false;
-    for(let i = 0; i < 10; i++) {
-        const rows = doc.querySelectorAll(SELECTORS.tableRow);
-        if (rows.length > 5) { dataLoaded = true; break; }
+    for (let i = 0; i < 10; i++) {
+        if (doc.querySelectorAll(SELECTORS.tableRow).length > 5) { dataLoaded = true; break; }
         await sleep(1000);
     }
     if (!dataLoaded) { updateOverlayStatus('Timeout', 'error'); return; }
 
-    if (targetMode === 'OU') {
-        const selectMenu = doc.getElementById('bet-select-market');
-        if (selectMenu) { selectMenu.value = 'Over_Under_2_5'; selectMenu.dispatchEvent(new Event('change', { bubbles: true })); await sleep(2500); }
-    } else if (targetMode === '1X2') {
-        const selectMenu = doc.getElementById('bet-select-market');
-        if (selectMenu) { selectMenu.value = 'Match_Result'; selectMenu.dispatchEvent(new Event('change', { bubbles: true })); await sleep(2500); }
-    } else if (targetMode === 'GG') {
-        const selectMenu = doc.getElementById('bet-select-market');
-        if (selectMenu) { selectMenu.value = 'GoalGoal_NoGoal'; selectMenu.dispatchEvent(new Event('change', { bubbles: true })); await sleep(2500); }
-    }
+    const marketValue = { 'OU': 'Over_Under_2_5', '1X2': 'Match_Result', 'GG': 'GoalGoal_NoGoal' }[targetMode];
+    const selectMenu = doc.getElementById('bet-select-market');
+    if (selectMenu && marketValue) { selectMenu.value = marketValue; selectMenu.dispatchEvent(new Event('change', { bubbles: true })); await sleep(2500); }
 
-    const rows = doc.querySelectorAll(SELECTORS.tableRow);
-    let selectedCount = 0;
-    const expectedCount = 1; 
-    let scrapedTotalOdds = 1.0;
-
-    for (const row of rows) {
-        if (selectedCount >= expectedCount) break;
+    let pick = null;
+    for (const row of doc.querySelectorAll(SELECTORS.tableRow)) {
         const textContent = row.innerText.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-        
         for (const target of targets) {
-            if (textContent.includes(target.home_team) && textContent.includes(target.away_team)) {
-                
-                if (targetMode === 'OU') {
-                    const overBtn = row.querySelector("label[for*='Over_Under_2_5'][for$='_over2']");
-                    if (overBtn) {
-                        const oddsValue = parseFloat(overBtn.innerText || overBtn.textContent);
-                        if (!isNaN(oddsValue)) scrapedTotalOdds *= oddsValue;
-                        simulateHumanClick(overBtn);
-                        selectedCount++;
-                        addMatchToOverlay(target.home_team, target.away_team, `[>2.5] ${oddsValue}`, 'success');
-                        await sleep(2000); 
-                    }
-                } 
-                else if (targetMode === '1X2') {
-                    const inputs = row.querySelectorAll('input.checkbox_bets');
-                    if (inputs.length >= 3) {
-                        let targetInput = target.prediction === "HOME" ? inputs[0] : target.prediction === "DRAW" ? inputs[1] : inputs[2];
-                        if (targetInput) {
-                            const label = row.querySelector(`label[for='${targetInput.id}']`);
-                            if (label) {
-                                const oddsValue = parseFloat(label.innerText || label.textContent);
-                                if (!isNaN(oddsValue)) scrapedTotalOdds *= oddsValue;
-                                simulateHumanClick(label);
-                                selectedCount++;
-                                addMatchToOverlay(target.home_team, target.away_team, `[${target.prediction}] ${oddsValue}`, 'success');
-                                await sleep(2000);
-                            }
-                        }
-                    }
-                }
-                else if (targetMode === 'GG') {
-                    const label = row.querySelector("label[for$='_gg']");
-                    if (label) {
-                        const oddsValue = parseFloat(label.innerText || label.textContent);
-                        if (!isNaN(oddsValue)) scrapedTotalOdds *= oddsValue;
-                        simulateHumanClick(label);
-                        selectedCount++;
-                        addMatchToOverlay(target.home_team, target.away_team, `[GG] ${oddsValue}`, 'success');
-                        await sleep(2000);
-                    }
-                }
-            }
+            if (!textContent.includes(target.home_team) || !textContent.includes(target.away_team)) continue;
+            const selection = findSelection(row, target, targetMode);
+            if (selection) { pick = { ...selection, target }; break; }
         }
+        if (pick) break;
     }
 
-    if (selectedCount === expectedCount) {
-        const localData = await chrome.storage.local.get(['localLossStreak']);
-        const currentLocalStreakForMath = localData.localLossStreak || 0;
-        const calculatedStake = conf.baseStake * Math.pow(MARTINGALE_MULTIPLIER, currentLocalStreakForMath);
-        const finalStake = parseFloat(calculatedStake.toFixed(2));
-        const expectedReturn = parseFloat((calculatedStake * scrapedTotalOdds).toFixed(2));
-        const pureProfit = parseFloat((expectedReturn - calculatedStake).toFixed(2));
+    // From here the week is finished for this browser, whether or not a bet goes through.
+    await markWeekHandled(currentWeekStr);
 
-        updateFinancials(scrapedTotalOdds.toFixed(2), finalStake.toFixed(2), expectedReturn.toFixed(2), pureProfit.toFixed(2));
-        updateOverlayStatus(`Placing Bet`, 'info');
-        addLogEntry(`Stake Math: ₦${conf.baseStake} x 2.54^${currentLocalStreakForMath}`);
-        
-        const stakeInput = doc.querySelector(SELECTORS.stakeInput);
-        if (stakeInput) {
-            stakeInput.value = finalStake;
-            stakeInput.dispatchEvent(new Event('input', { bubbles: true }));
-            await sleep(1000);
-        }
-        const betBtn = doc.querySelector(SELECTORS.placeBetBtn);
-        if (betBtn) {
-            simulateHumanClick(betBtn); 
-            await sleep(1500); 
-            const confirmBtn = doc.querySelector(SELECTORS.confirmBetBtn);
-            if (confirmBtn) {
-                simulateHumanClick(confirmBtn);
-                await chrome.storage.local.set({ pendingBet: { stake: finalStake, profit: pureProfit, week: currentWeekStr } });
-                await sleep(2000); 
-                updateOverlayStatus('Bet Confirmed ✅', 'success');
-                addLogEntry(`Placed: ₦${finalStake.toFixed(2)}`);
-                const closeBtn = doc.querySelector(SELECTORS.closeTicketBtn);
-                if (closeBtn) simulateHumanClick(closeBtn);
-            }
-        }
-    } else {
-        updateOverlayStatus(`Mismatch: ${selectedCount}/${expectedCount}`, 'error');
+    if (!pick) {
+        updateOverlayStatus('Mismatch: 0/1', 'error');
         addLogEntry('Error: Targets not found/Odds disabled');
+        return;
     }
 
-    lastBetWeek = currentWeekStr;
+    const oddsValue = parseFloat(pick.element.innerText || pick.element.textContent);
+    if (isNaN(oddsValue) || oddsValue < MIN_ODDS) {
+        addMatchToOverlay(pick.target.home_team, pick.target.away_team, `[${pick.tag}] ${isNaN(oddsValue) ? '-' : oddsValue}`, 'error');
+        updateOverlayStatus('Skipped: odds too low', 'info');
+        addLogEntry(`Skipped ${currentWeekStr}: odds below ${MIN_ODDS}`);
+        return;
+    }
+
+    const calculatedStake = conf.baseStake * Math.pow(MARTINGALE_MULTIPLIER, lossStreak);
+    const finalStake = parseFloat(calculatedStake.toFixed(2));
+    const expectedReturn = parseFloat((calculatedStake * oddsValue).toFixed(2));
+    const pureProfit = parseFloat((expectedReturn - calculatedStake).toFixed(2));
+
+    if (conf.maxStake > 0 && finalStake > conf.maxStake) { await triggerCircuitBreaker(`Next stake ₦${finalStake} is above Max Stake`); return; }
+    if (conf.stopLoss > 0 && currentTotal - finalStake < -conf.stopLoss) { await triggerCircuitBreaker(`Next stake ₦${finalStake} would pass Stop Loss`); return; }
+
+    updateOverlayStatus('Executing...', 'info');
+    simulateHumanClick(pick.element);
+    addMatchToOverlay(pick.target.home_team, pick.target.away_team, `[${pick.tag}] ${oddsValue}`, 'success');
+    await sleep(2000);
+
+    updateFinancials(oddsValue.toFixed(2), finalStake.toFixed(2), expectedReturn.toFixed(2), pureProfit.toFixed(2));
+    updateOverlayStatus(`Placing Bet`, 'info');
+    addLogEntry(`Stake Math: ₦${conf.baseStake} x ${MARTINGALE_MULTIPLIER}^${lossStreak}`);
+
+    const stakeInput = doc.querySelector(SELECTORS.stakeInput);
+    const betBtn = doc.querySelector(SELECTORS.placeBetBtn);
+    if (!stakeInput || !betBtn) { await triggerCircuitBreaker('Bet slip not found - no bet placed'); return; }
+
+    stakeInput.value = finalStake;
+    stakeInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(1000);
+    simulateHumanClick(betBtn);
+
+    const confirmBtn = await waitForVisible(doc, SELECTORS.confirmBetBtn, 5000);
+    if (!confirmBtn) { await triggerCircuitBreaker('Confirm button missing - no bet placed'); return; }
+    simulateHumanClick(confirmBtn);
+
+    // Only count the bet once Bet9ja shows the sent-ticket dialog.
+    const closeBtn = await waitForVisible(doc, SELECTORS.closeTicketBtn, 8000);
+    if (!closeBtn) {
+        await triggerCircuitBreaker('Bet not confirmed - check your Bet9ja bet history');
+        return;
+    }
+
+    await chrome.storage.local.set({ pendingBet: { stake: finalStake, profit: pureProfit, week: currentWeekStr, roundId: payload.roundId, mode: targetMode, placedAt: Date.now() } });
+    updateOverlayStatus('Bet Confirmed ✅', 'success');
+    addLogEntry(`Placed: ₦${finalStake.toFixed(2)}`);
+    simulateHumanClick(closeBtn);
 }
 
 setInterval(async () => {
-    if (isBusy) return; 
-    isBusy = true; 
+    if (isBusy) return;
+    isBusy = true;
     try {
         const payload = await fetchAIData();
         await executeBets(payload);
     } catch (e) {
         addLogEntry('Error: ' + e.message);
     }
-    isBusy = false; 
+    isBusy = false;
 }, POLLING_INTERVAL_MS);

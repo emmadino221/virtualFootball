@@ -13,19 +13,21 @@ document.addEventListener('DOMContentLoaded', () => {
         takeProfit: document.getElementById('tp-limit'),
         stopLoss: document.getElementById('sl-limit'),
         maxLossStreak: document.getElementById('max-streak-limit'),
+        maxStake: document.getElementById('max-stake-limit'),
         chatId: document.getElementById('chat-id-input'),
         bettingMode: document.getElementById('betting-mode')
     };
     
     let isRunning = false;
 
-    chrome.storage.local.get(['botEnabled', 'licenseKey', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'chatId', 'totalProfit', 'bettingMode'], (res) => {
+    chrome.storage.local.get(['botEnabled', 'licenseKey', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'maxStake', 'chatId', 'totalProfit', 'bettingMode'], (res) => {
         isRunning = !!res.botEnabled;
         if (res.licenseKey !== undefined) inputs.licenseKey.value = res.licenseKey;
         if (res.baseStake !== undefined) inputs.baseStake.value = res.baseStake;
         if (res.takeProfit !== undefined) inputs.takeProfit.value = res.takeProfit;
         if (res.stopLoss !== undefined) inputs.stopLoss.value = res.stopLoss;
         if (res.maxLossStreak !== undefined) inputs.maxLossStreak.value = res.maxLossStreak;
+        if (res.maxStake) inputs.maxStake.value = res.maxStake;
         if (res.chatId !== undefined) inputs.chatId.value = res.chatId;
         if (res.bettingMode !== undefined) inputs.bettingMode.value = res.bettingMode;
         
@@ -46,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
             takeProfit: parseFloat(inputs.takeProfit.value),
             stopLoss: parseFloat(inputs.stopLoss.value),
             maxLossStreak: parseInt(inputs.maxLossStreak.value),
+            maxStake: parseFloat(inputs.maxStake.value) || 0,
             chatId: inputs.chatId.value.trim(),
             bettingMode: inputs.bettingMode.value
         };
@@ -68,9 +71,10 @@ document.addEventListener('DOMContentLoaded', () => {
     resetBtn.addEventListener('click', () => {
         chrome.storage.local.set({ 
             totalProfit: 0, pendingBet: null, winStreak: 0, maxWinStreak: 0, 
-            maxLossStreakRec: 0, localLossStreak: 0,
-            licenseKey: '', baseStake: '', takeProfit: '', stopLoss: '', maxLossStreak: ''
+            maxLossStreakRec: 0, localLossStreak: 0, lastBetMark: null,
+            licenseKey: '', baseStake: '', takeProfit: '', stopLoss: '', maxLossStreak: '', maxStake: 0
         });
+        inputs.maxStake.value = '';
         
         inputs.licenseKey.value = '';
         inputs.baseStake.value = '';
@@ -132,6 +136,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 if (response.status === 401) {
                     serverStatus.textContent = "🔴 Invalid License Key";
+                    serverStatus.style.color = "#ef4444";
+                } else if (!response.ok) {
+                    serverStatus.textContent = "🔴 Server Error (" + response.status + ")";
                     serverStatus.style.color = "#ef4444";
                 } else {
                     serverStatus.textContent = "🟢 Server Linked & Authenticated";

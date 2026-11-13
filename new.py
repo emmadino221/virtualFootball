@@ -35,6 +35,10 @@ GOOGLE_CREDENTIALS_FILE = Path(os.getenv("GOOGLE_CREDENTIALS_FILE", BASE_DIR / "
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 VALID_KEYS = [key.strip() for key in os.getenv("VALID_KEYS", "").split(",") if key.strip()]
+# Telegram chats allowed to send control commands: the signal chat, any extra admin chats,
+# and chat IDs registered by an extension that holds a valid licence key.
+ADMIN_CHAT_IDS = {str(CHAT_ID or "").strip()} | {cid.strip() for cid in os.getenv("TELEGRAM_ADMIN_CHAT_IDS", "").split(",") if cid.strip()}
+authorized_chat_ids = set()
 
 if not TOKEN or not CHAT_ID or not VALID_KEYS:
     raise ValueError("Missing Telegram or extension credentials. Configure the service environment.")
@@ -62,6 +66,9 @@ CORS(app)
 
 current_live_targets = []
 current_ready_week = None
+current_round_id = None
+recent_results = []  # settled rounds, oldest first; the extension settles its own bets from these
+RECENT_RESULTS_KEPT = 30
 current_loss_streak_ou = 0  
 current_loss_streak_1x2 = 0 
 current_loss_streak_gg = 0
@@ -81,11 +88,18 @@ def get_bets():
 def sync_ext():
     if not check_auth(request): return jsonify({"error": "Unauthorized"}), 401
     global last_known_ext_state, pending_commands
-    data = request.json
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict): data = {}
+    ext_chat_id = str(data.pop("chatId", "") or "").strip()
+    if re.fullmatch(r"-?\d{1,20}", ext_chat_id): authorized_chat_ids.add(ext_chat_id)
     if data: last_known_ext_state.update(data)
     cmds = pending_commands[:]
     pending_commands.clear()
+    ready_week = current_ready_week
     return jsonify({
+        "ready_week": ready_week,
+        "round_id": current_round_id if ready_week else None,
+        "results": recent_results[-RECENT_RESULTS_KEPT:],
         "targets_ou": [t for t in current_live_targets if t.get("is_ou_target")],
         "targets_1x2": [t for t in current_live_targets if t.get("is_1x2_target")],
         "targets_gg": [t for t in current_live_targets if t.get("is_gg_target")],
@@ -146,7 +160,9 @@ def telegram_poller():
                     msg = result.get("message", {})
                     text = msg.get("text", "").strip()
                     chat_id = str(msg.get("chat", {}).get("id", ""))
-                    if text.startswith("/"): handle_telegram_command(text, chat_id)
+                    if not text.startswith("/"): continue
+                    if chat_id in ADMIN_CHAT_IDS or chat_id in authorized_chat_ids: handle_telegram_command(text, chat_id)
+                    else: send_telegram_message(f"⛔ <b>NOT AUTHORISED.</b> This chat ({chat_id}) cannot control the bot.", chat_id)
         except Exception: time.sleep(5)
 
 def handle_telegram_command(text, req_chat_id):
@@ -464,7 +480,10 @@ for col, col_type in [("confidence_over15", "REAL"), ("goals15", "TEXT"), ("webs
 cursor.execute("PRAGMA table_info(weekly_accumulators)")
 acc_cols = [row[1] for row in cursor.fetchall()]
 if "result_gg" not in acc_cols: cursor.execute("ALTER TABLE weekly_accumulators ADD COLUMN result_gg TEXT")
+if "website_round" not in acc_cols: cursor.execute("ALTER TABLE weekly_accumulators ADD COLUMN website_round TEXT")
 conn.commit()
+for acc_row in reversed(cursor.execute("SELECT website_round, week, result_ou, result_1x2, result_gg FROM weekly_accumulators WHERE website_round IS NOT NULL ORDER BY id DESC LIMIT ?", (RECENT_RESULTS_KEPT,)).fetchall()):
+    recent_results.append({"round_id": acc_row[0], "week": acc_row[1], "ou": acc_row[2], "1x2": acc_row[3], "gg": acc_row[4]})
 
 options = webdriver.ChromeOptions()
 options.add_argument("--disable-gpu")
@@ -492,6 +511,7 @@ while True:
         if tracked_week and current_week != tracked_week:
             print(f"\n🔄 UI FLIP: {tracked_week} ended. Processing data export...")
             current_ready_week = None 
+            current_round_id = None
             old_state = shortlist_message_ids.get(normalize_week_key(tracked_week))
             if old_state and not old_state.get("fully_settled"):
                 shortlisted_targets = []
@@ -535,8 +555,10 @@ while True:
                     else: current_loss_streak_gg += 1
                 else: acca_gg = "N/A"
                 
-                cursor.execute("INSERT INTO weekly_accumulators (timestamp, week, result_1x2, result_ou, result_gg) VALUES (?, ?, ?, ?, ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tracked_week, acca_1x2, acca_ou, acca_gg))
+                cursor.execute("INSERT INTO weekly_accumulators (timestamp, week, result_1x2, result_ou, result_gg, website_round) VALUES (?, ?, ?, ?, ?, ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tracked_week, acca_1x2, acca_ou, acca_gg, old_state.get("website_round")))
                 conn.commit()
+                recent_results.append({"round_id": old_state.get("website_round"), "week": tracked_week, "ou": acca_ou, "1x2": acca_1x2, "gg": acca_gg})
+                del recent_results[:-RECENT_RESULTS_KEPT]
                 stats = get_current_stats()
                 if stats:
                     stats_for_export = {"acca_1x2": acca_1x2, "acca_ou": acca_ou, "acca_gg": acca_gg, "win_rate_1x2": stats["wr_1x2"], "max_streak_1x2": stats["ml_1x2"], "win_rate_ou": stats["wr_ou"], "max_streak_ou": stats["ml_ou"], "win_rate_gg": stats["wr_gg"], "max_streak_gg": stats["ml_gg"]}
@@ -599,7 +621,7 @@ while True:
         if week_state["all_targets"] and not week_state["prediction_sent"]:
             targets_to_send = [t for t in week_state["all_targets"] if t.get("is_shortlisted")]
             msg_id = send_or_update_shortlist(week_state.get("message_id"), current_week, targets_to_send)
-            week_state.update({"message_id": msg_id, "prediction_sent": True}); current_ready_week = current_week  
+            week_state.update({"message_id": msg_id, "prediction_sent": True}); current_round_id = week_state.get("website_round"); current_ready_week = current_week  
             print(f"✨ AI Sent Signals for {current_week} to Telegram.")
 
         for parsed in get_live_scores_js():
