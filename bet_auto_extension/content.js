@@ -525,7 +525,16 @@ async function executeBets(payload) {
     if (!(conf.baseStake > 0)) { await triggerCircuitBreaker("Invalid Base Stake"); return; }
 
     if (!payload.serverSupported) { updateOverlayStatus('Server update required', 'error'); return; }
-    if (stillPending) { updateOverlayStatus('Bet placed - awaiting result', 'info'); return; }
+    if (stillPending) {
+        // Say which bet is being waited on; the log is lost whenever the page reloads.
+        const pending = (await chrome.storage.local.get(['pendingBet'])).pendingBet;
+        if (pending) {
+            const marketName = MARKETS[pending.mode] ? MARKETS[pending.mode].name : pending.mode;
+            updateOverlayWeek(`${pending.week || '-'} | ₦${pending.stake} ${marketName}`);
+        }
+        updateOverlayStatus('Bet placed - awaiting result', 'info');
+        return;
+    }
 
     const currentTotal = storage.totalProfit || 0;
     const lossStreak = storage.localLossStreak || 0;
