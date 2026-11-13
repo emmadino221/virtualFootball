@@ -1,5 +1,9 @@
 let isBusy = false;
-const MARTINGALE_MULTIPLIER = 2.54; 
+// Recovery stake for the odds actually on offer: a win pays back everything lost in the
+// current losing streak plus the profit a base-stake win would have made at those odds.
+function recoveryStake(baseStake, streakLoss, odds) {
+    return Math.ceil((baseStake + streakLoss / (odds - 1)) * 100 - 1e-6) / 100;
+}
 const SELECTORS = {
     currentWeek: "#leagueWeekNumber",                
     tableRow: "tr",                                  
@@ -322,7 +326,7 @@ async function fetchAIData() {
                     updateOverlayStatus('🛑 STOPPED', 'error');
                     addLogEntry('Remote: Kill-Switch Activated');
                 } else if (cmd.type === 'START') {
-                    await chrome.storage.local.set({ botEnabled: true, localLossStreak: 0 });
+                    await chrome.storage.local.set({ botEnabled: true, localLossStreak: 0, streakLoss: 0 });
                     updateOverlayStatus('🟢 RUNNING', 'success');
                     addLogEntry('Remote: Bot Started');
                 } else if (cmd.type === 'STAKE') {
@@ -335,7 +339,7 @@ async function fetchAIData() {
                     await chrome.storage.local.set({ stopLoss: cmd.value });
                     addLogEntry(`Remote: SL -₦${cmd.value}`);
                 } else if (cmd.type === 'RESET') {
-                    await chrome.storage.local.set({ totalProfit: 0, pendingBet: null, winStreak: 0, maxWinStreak: 0, maxLossStreakRec: 0, localLossStreak: 0 });
+                    await chrome.storage.local.set({ totalProfit: 0, pendingBet: null, winStreak: 0, maxWinStreak: 0, maxLossStreakRec: 0, localLossStreak: 0, streakLoss: 0 });
                     updateOverlayTotalProfit(0);
                     addLogEntry('Remote: System Wiped');
                 } else if (cmd.type === 'MODE') {
@@ -400,7 +404,7 @@ async function triggerCircuitBreaker(reason) {
 // Settles the bet this browser actually placed, using the result of the exact round it was
 // placed on. Returns true while that result is still outstanding.
 async function settlePendingBet(results) {
-    const st = await chrome.storage.local.get(['pendingBet', 'totalProfit', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'localLossStreak', 'chatId', 'licenseKey']);
+    const st = await chrome.storage.local.get(['pendingBet', 'totalProfit', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'localLossStreak', 'streakLoss', 'chatId', 'licenseKey']);
     const bet = st.pendingBet;
     if (!bet) return false;
 
@@ -420,8 +424,10 @@ async function settlePendingBet(results) {
     let mWStrk = st.maxWinStreak || 0;
     let mLStrk = st.maxLossStreakRec || 0;
     let lossStreak = st.localLossStreak || 0;
+    let streakLoss = lossStreak > 0 ? (parseFloat(st.streakLoss) || 0) : 0;
 
     if (outcome === 'WIN') {
+        streakLoss = 0;
         currentTotal += bet.profit;
         addLogEntry(`WON: +₦${bet.profit.toFixed(2)}`);
         wStrk++;
@@ -431,6 +437,7 @@ async function settlePendingBet(results) {
         currentTotal -= bet.stake;
         addLogEntry(`LOST: -₦${bet.stake.toFixed(2)}`);
         wStrk = 0;
+        streakLoss = parseFloat((streakLoss + bet.stake).toFixed(2));
         lossStreak++;
         if (lossStreak > mLStrk) mLStrk = lossStreak;
     }
@@ -441,7 +448,8 @@ async function settlePendingBet(results) {
         winStreak: wStrk,
         maxWinStreak: mWStrk,
         maxLossStreakRec: mLStrk,
-        localLossStreak: lossStreak
+        localLossStreak: lossStreak,
+        streakLoss: streakLoss
     });
     updateOverlayTotalProfit(currentTotal);
 
@@ -497,7 +505,7 @@ async function executeBets(payload) {
 
     const stillPending = await settlePendingBet(payload.results);
 
-    const storage = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'maxStake', 'minOdds', 'totalProfit', 'localLossStreak', 'lastBetMark', 'licenseKey']);
+    const storage = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'maxLossStreak', 'maxStake', 'minOdds', 'totalProfit', 'localLossStreak', 'streakLoss', 'lastBetMark', 'licenseKey']);
     if (!storage.botEnabled) return;
     if (storage.baseStake === undefined || storage.baseStake === '' ||
         storage.maxLossStreak === undefined || storage.maxLossStreak === '' ||
@@ -606,10 +614,10 @@ async function executeBets(payload) {
         return;
     }
 
-    const calculatedStake = conf.baseStake * Math.pow(MARTINGALE_MULTIPLIER, lossStreak);
-    const finalStake = parseFloat(calculatedStake.toFixed(2));
-    const expectedReturn = parseFloat((calculatedStake * oddsValue).toFixed(2));
-    const pureProfit = parseFloat((expectedReturn - calculatedStake).toFixed(2));
+    const streakLoss = lossStreak > 0 ? (parseFloat(storage.streakLoss) || 0) : 0;
+    const finalStake = recoveryStake(conf.baseStake, streakLoss, oddsValue);
+    const expectedReturn = parseFloat((finalStake * oddsValue).toFixed(2));
+    const pureProfit = parseFloat((expectedReturn - finalStake).toFixed(2));
 
     if (conf.maxStake > 0 && finalStake > conf.maxStake) { await triggerCircuitBreaker(`Next stake ₦${finalStake} is above Max Stake`); return; }
     if (conf.stopLoss > 0 && currentTotal - finalStake < -conf.stopLoss) { await triggerCircuitBreaker(`Next stake ₦${finalStake} would pass Stop Loss`); return; }
@@ -623,7 +631,7 @@ async function executeBets(payload) {
 
     updateFinancials(oddsValue.toFixed(2), finalStake.toFixed(2), expectedReturn.toFixed(2), pureProfit.toFixed(2));
     updateOverlayStatus(`Placing Bet`, 'info');
-    addLogEntry(`Stake Math: ₦${conf.baseStake} x ${MARTINGALE_MULTIPLIER}^${lossStreak}`);
+    addLogEntry(`Stake Math: ₦${conf.baseStake} + ₦${streakLoss} lost / (${oddsValue} - 1)`);
 
     const stakeInput = doc.querySelector(SELECTORS.stakeInput);
     const betBtn = doc.querySelector(SELECTORS.placeBetBtn);

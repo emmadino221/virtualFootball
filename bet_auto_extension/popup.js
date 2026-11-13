@@ -79,7 +79,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resetBtn.addEventListener('click', () => {
         chrome.storage.local.set({ 
             totalProfit: 0, pendingBet: null, winStreak: 0, maxWinStreak: 0, 
-            maxLossStreakRec: 0, localLossStreak: 0, lastBetMark: null,
+            maxLossStreakRec: 0, localLossStreak: 0, streakLoss: 0, lastBetMark: null,
             licenseKey: '', baseStake: '', takeProfit: '', stopLoss: '', maxLossStreak: '', maxStake: 0, minOdds: 0
         });
         inputs.maxStake.value = '';
@@ -107,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showAlert("⚠️ Please fill out all fields and click SAVE before starting.", true);
                 return; 
             }
-            chrome.storage.local.set({ botEnabled: true, localLossStreak: 0 });
+            chrome.storage.local.set({ botEnabled: true, localLossStreak: 0, streakLoss: 0 });
         } else {
             chrome.storage.local.set({ botEnabled: false });
         }
