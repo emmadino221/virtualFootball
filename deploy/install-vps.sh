@@ -141,6 +141,8 @@ fi
 
 sudo systemctl daemon-reload
 sudo systemctl restart balls49-site.service
-sudo systemctl enable --now balls49-virtual.service balls49-virtual-feed.service
+sudo systemctl enable balls49-virtual.service balls49-virtual-feed.service
+# restart, not only start: a service that is already running must load the new code.
+sudo systemctl restart balls49-virtual.service balls49-virtual-feed.service
 sudo systemctl reload nginx
 sudo systemctl --no-pager --full status balls49-virtual.service balls49-virtual-feed.service
