@@ -23,7 +23,7 @@ const DEFAULT_MIN_ODDS = 1.65;
 const DEFAULT_MIN_ODDS_BY_MODE = { 'OU': 1.30 };
 const PENDING_TIMEOUT_MS = 15 * 60 * 1000;
 const WEEK_LOCK_MS = 10 * 60 * 1000;
-const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg', 'NG': 'ng' };
+const RESULT_KEYS = { 'OU': 'ou', '1X2': '1x2', 'GG': 'gg', 'NG': 'ng', 'UN': 'un' };
 // The bot bets the picks the website publishes. `value` is Bet9ja's market in the market
 // menu, `find` locates it when the exact value is not there, `picks` is how many
 // selections the round needs, and `pick` matches the `for` attribute of the right label.
@@ -31,7 +31,8 @@ const MARKETS = {
     'OU': { name: 'Over 1.5', value: 'Over_Under_1_5', find: /^over.{0,3}under.{0,3}1.?5$/i, picks: 2, pick: /(^|_)over[\d_]*$/i, fallbackIndex: 0 },
     '1X2': { name: 'Win', value: 'Match_Result', find: /match.{0,3}result|^1x2$/i, picks: 1 },
     'GG': { name: 'GG', value: 'GoalGoal_NoGoal', picks: 1, pick: /(^|_)(gg|goalgoal|yes)$/i, fallbackIndex: 0 },
-    'NG': { name: 'NG', value: 'GoalGoal_NoGoal', picks: 1, pick: /(^|_)(ng|nogoal|no)$/i, fallbackIndex: 1 }
+    'NG': { name: 'NG', value: 'GoalGoal_NoGoal', picks: 1, pick: /(^|_)(ng|nogoal|no)$/i, fallbackIndex: 1 },
+    'UN': { name: 'Under 1.5', value: 'Over_Under_1_5', find: /^over.{0,3}under.{0,3}1.?5$/i, picks: 1, pick: /(^|_)under[\d_]*$/i, fallbackIndex: 1 }
 };
 
 function createOverlay() {

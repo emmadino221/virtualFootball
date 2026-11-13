@@ -74,6 +74,10 @@ current_loss_streak_ou = 0
 current_loss_streak_1x2 = 0 
 current_loss_streak_gg = 0
 current_loss_streak_ng = 0
+current_loss_streak_un = 0
+# Under 1.5 has no model of its own: the pick is the round's lowest Over 1.5 confidence,
+# and only when that confidence is at most this. The website enforces the same limit.
+UNDER_MAX_OVER_CONFIDENCE = 65
 pending_commands = []
 last_known_ext_state = {"botEnabled": False, "baseStake": 100, "takeProfit": 0, "stopLoss": 0, "totalProfit": 0.0, "bettingMode": "OU"}
 
@@ -109,12 +113,14 @@ def sync_ext():
             "1X2": [t for t in current_live_targets if t.get("is_1x2_target")],
             "GG": [t for t in current_live_targets if t.get("is_gg_target")],
             "NG": [t for t in current_live_targets if t.get("is_ng_target")],
+            "UN": [t for t in current_live_targets if t.get("is_un_target")],
         },
         "targets_ou": [], "targets_1x2": [], "targets_gg": [],
         "loss_streak_ou": current_loss_streak_ou,
         "loss_streak_1x2": current_loss_streak_1x2,
         "loss_streak_gg": current_loss_streak_gg,
         "loss_streak_ng": current_loss_streak_ng,
+        "loss_streak_un": current_loss_streak_un,
         "commands": cmds
     })
 
@@ -175,7 +181,7 @@ def telegram_poller():
         except Exception: time.sleep(5)
 
 def handle_telegram_command(text, req_chat_id):
-    global pending_commands, current_loss_streak_ou, current_loss_streak_1x2, current_loss_streak_gg, current_loss_streak_ng
+    global pending_commands, current_loss_streak_ou, current_loss_streak_1x2, current_loss_streak_gg, current_loss_streak_ng, current_loss_streak_un
     cmd = text.lower().split(); main_cmd = cmd[0]
     if main_cmd == "/stop":
         pending_commands.append({"type": "STOP"})
@@ -203,18 +209,18 @@ def handle_telegram_command(text, req_chat_id):
         except: send_telegram_message("⚠️ <b>ERROR:</b> Invalid amount.", req_chat_id)
     elif main_cmd == "/mode" and len(cmd) > 1:
         new_mode = cmd[1].upper()
-        if new_mode in ["OU", "1X2", "GG", "NG"]:
+        if new_mode in ["OU", "1X2", "GG", "NG", "UN"]:
             pending_commands.append({"type": "MODE", "value": new_mode})
             send_telegram_message(f"⚙️ <b>COMMAND RECEIVED:</b> Strategy switched to {new_mode}", req_chat_id)
     elif main_cmd == "/reset":
-        current_loss_streak_ou = current_loss_streak_1x2 = current_loss_streak_gg = current_loss_streak_ng = 0
+        current_loss_streak_ou = current_loss_streak_1x2 = current_loss_streak_gg = current_loss_streak_ng = current_loss_streak_un = 0
         pending_commands.append({"type": "RESET"})
         send_telegram_message("🔄 <b>COMMAND RECEIVED:</b> System Reset. Wiped to zero.", req_chat_id)
     elif main_cmd == "/history":
         try:
             conn_hist = sqlite3.connect(DB_PATH, timeout=20)
             c_hist = conn_hist.cursor()
-            history = c_hist.execute("SELECT week, result_ou, result_1x2, result_gg, result_ng FROM weekly_accumulators ORDER BY id DESC LIMIT 5").fetchall()
+            history = c_hist.execute("SELECT week, result_ou, result_1x2, result_gg, result_ng, result_un FROM weekly_accumulators ORDER BY id DESC LIMIT 5").fetchall()
             conn_hist.close()
             if not history: send_telegram_message("📜 <b>HISTORY:</b> No settled matches yet.", req_chat_id)
             else:
@@ -224,13 +230,14 @@ def handle_telegram_command(text, req_chat_id):
                     e_1x2 = "✅" if r[2] == "WIN" else "❌" if r[2] == "LOSS" else "🟡"
                     e_gg = "✅" if r[3] == "WIN" else "❌" if r[3] == "LOSS" else "🟡"
                     e_ng = "✅" if r[4] == "WIN" else "❌" if r[4] == "LOSS" else "🟡"
-                    msg += f"<b>{r[0]}:</b> O1.5: {e_ou} | Win: {e_1x2} | GG: {e_gg} | NG: {e_ng}\n"
+                    e_un = "✅" if r[5] == "WIN" else "❌" if r[5] == "LOSS" else "🟡"
+                    msg += f"<b>{r[0]}:</b> O1.5: {e_ou} | Win: {e_1x2} | GG: {e_gg} | NG: {e_ng} | U1.5: {e_un}\n"
                 send_telegram_message(msg, req_chat_id)
         except: send_telegram_message(f"⚠️ <b>ERROR:</b> Could not read history.", req_chat_id)
     elif main_cmd == "/status":
         st = last_known_ext_state
         mode = st.get("bettingMode", "OU")
-        active_streak = {"OU": current_loss_streak_ou, "1X2": current_loss_streak_1x2, "GG": current_loss_streak_gg, "NG": current_loss_streak_ng}.get(mode, 0)
+        active_streak = {"OU": current_loss_streak_ou, "1X2": current_loss_streak_1x2, "GG": current_loss_streak_gg, "NG": current_loss_streak_ng, "UN": current_loss_streak_un}.get(mode, 0)
         profit = st.get("totalProfit", 0.0)
         en = "🟢 RUNNING" if st.get("botEnabled") else "🔴 STOPPED"
         msg = f"📊 <b>LIVE STATUS</b>\n\n<b>Engine:</b> {en}\n<b>Strategy:</b> {mode}\n<b>Base Stake:</b> ₦{st.get('baseStake', 0)}\n<b>Net Profit:</b> {'+' if profit >= 0 else '-'}₦{abs(profit):,.2f}\n<b>Global Loss Streak:</b> {active_streak}"
@@ -267,11 +274,11 @@ def get_current_stats():
     try:
         conn_hist = sqlite3.connect(DB_PATH, timeout=20)
         c_hist = conn_hist.cursor()
-        history = c_hist.execute("SELECT result_1x2, result_ou, result_gg, result_ng FROM weekly_accumulators ORDER BY id ASC").fetchall()
+        history = c_hist.execute("SELECT result_1x2, result_ou, result_gg, result_ng, result_un FROM weekly_accumulators ORDER BY id ASC").fetchall()
         conn_hist.close()
         if not history: return None
         stats = {}
-        for index, key in enumerate(("1x2", "ou", "gg", "ng")):
+        for index, key in enumerate(("1x2", "ou", "gg", "ng", "un")):
             # Rounds without a pick or without a known score are not counted either way.
             settled = [r[index] for r in history if r[index] in ("WIN", "LOSS")]
             stats[f"wr_{key}"] = round(settled.count("WIN") / len(settled) * 100, 2) if settled else 0
@@ -327,6 +334,7 @@ def safe_google_export(week, shortlisted_targets, stats, all_targets, max_retrie
 MARKET_SECTIONS = [
     ("🏆 WIN SINGLE", "is_1x2_target", lambda m: m["prediction"], "status"),
     ("⚽ OVER 1.5 DOUBLE", "is_ou_target", lambda m: "Over 1.5", "ou_status"),
+    ("🔻 UNDER 1.5 SINGLE", "is_un_target", lambda m: "Under 1.5", "un_status"),
     ("🎯 GG SINGLE", "is_gg_target", lambda m: "GG", "gg_status"),
     ("🛡️ NG SINGLE", "is_ng_target", lambda m: "NG", "gg_status"),
 ]
@@ -345,6 +353,7 @@ def build_shortlist_message(week, matches, stats=None):
         lines.append(f"<b>Over 1.5:</b> {stats['wr_ou']}% | Max Loss: {stats['ml_ou']}")
         lines.append(f"<b>GG:</b> {stats['wr_gg']}% | Max Loss: {stats['ml_gg']}")
         lines.append(f"<b>NG:</b> {stats['wr_ng']}% | Max Loss: {stats['ml_ng']}")
+        lines.append(f"<b>Under 1.5:</b> {stats['wr_un']}% | Max Loss: {stats['ml_un']}")
     lines.append("\n<b>Status:</b> 🟡 <b>PENDING</b>")
     return "\n".join(lines)
 
@@ -481,9 +490,10 @@ acc_cols = [row[1] for row in cursor.fetchall()]
 if "result_gg" not in acc_cols: cursor.execute("ALTER TABLE weekly_accumulators ADD COLUMN result_gg TEXT")
 if "website_round" not in acc_cols: cursor.execute("ALTER TABLE weekly_accumulators ADD COLUMN website_round TEXT")
 if "result_ng" not in acc_cols: cursor.execute("ALTER TABLE weekly_accumulators ADD COLUMN result_ng TEXT")
+if "result_un" not in acc_cols: cursor.execute("ALTER TABLE weekly_accumulators ADD COLUMN result_un TEXT")
 conn.commit()
-for acc_row in reversed(cursor.execute("SELECT website_round, week, result_ou, result_1x2, result_gg, result_ng FROM weekly_accumulators WHERE website_round IS NOT NULL ORDER BY id DESC LIMIT ?", (RECENT_RESULTS_KEPT,)).fetchall()):
-    recent_results.append({"round_id": acc_row[0], "week": acc_row[1], "ou": acc_row[2], "1x2": acc_row[3], "gg": acc_row[4], "ng": acc_row[5]})
+for acc_row in reversed(cursor.execute("SELECT website_round, week, result_ou, result_1x2, result_gg, result_ng, result_un FROM weekly_accumulators WHERE website_round IS NOT NULL ORDER BY id DESC LIMIT ?", (RECENT_RESULTS_KEPT,)).fetchall()):
+    recent_results.append({"round_id": acc_row[0], "week": acc_row[1], "ou": acc_row[2], "1x2": acc_row[3], "gg": acc_row[4], "ng": acc_row[5], "un": acc_row[6]})
 
 options = webdriver.ChromeOptions()
 options.add_argument("--disable-gpu")
@@ -526,12 +536,13 @@ while True:
                         target["final_score"] = fs; target["actual_outcome"] = ao
                         target["status"] = "CORRECT" if ao == target["prediction"] else "WRONG"
                         target["ou_status"] = "CORRECT" if hg + ag > 1 else "WRONG"
+                        target["un_status"] = "CORRECT" if hg + ag < 2 else "WRONG"
                         target["gg_status"] = "CORRECT" if ("GG" if hg > 0 and ag > 0 else "NG") == target.get("prediction_gg") else "WRONG"
                     else:
                         # The score was never read from the page, so the result is unknown.
                         # It is left unsettled rather than recorded as 0 - 0.
                         target["final_score"] = "-"; target["actual_outcome"] = None
-                        target["status"] = target["ou_status"] = target["gg_status"] = "NO SCORE"
+                        target["status"] = target["ou_status"] = target["un_status"] = target["gg_status"] = "NO SCORE"
                     target["settled"] = True
                     cursor.execute("UPDATE matches SET actual_result=?, prediction_status=?, prediction_ou_status=?, live_score=?, match_status=? WHERE week=? AND home_team=? AND away_team=? AND website_round=?", (ao, target["status"], target["ou_status"], fs, "SETTLED" if fs is not None else "NO_SCORE", tracked_week, target["home_team"], target["away_team"], old_state.get("website_round")))
                     if target.get("is_shortlisted"): shortlisted_targets.append(target)
@@ -541,14 +552,16 @@ while True:
                 acca_ou = market_result(shortlisted_targets, "is_ou_target", "ou_status", 2)
                 acca_gg = market_result(shortlisted_targets, "is_gg_target", "gg_status", 1)
                 acca_ng = market_result(shortlisted_targets, "is_ng_target", "gg_status", 1)
+                acca_un = market_result(shortlisted_targets, "is_un_target", "un_status", 1)
                 if acca_1x2 != "N/A": current_loss_streak_1x2 = 0 if acca_1x2 == "WIN" else current_loss_streak_1x2 + 1
                 if acca_ou != "N/A": current_loss_streak_ou = 0 if acca_ou == "WIN" else current_loss_streak_ou + 1
                 if acca_gg != "N/A": current_loss_streak_gg = 0 if acca_gg == "WIN" else current_loss_streak_gg + 1
                 if acca_ng != "N/A": current_loss_streak_ng = 0 if acca_ng == "WIN" else current_loss_streak_ng + 1
+                if acca_un != "N/A": current_loss_streak_un = 0 if acca_un == "WIN" else current_loss_streak_un + 1
 
-                cursor.execute("INSERT INTO weekly_accumulators (timestamp, week, result_1x2, result_ou, result_gg, result_ng, website_round) VALUES (?, ?, ?, ?, ?, ?, ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tracked_week, acca_1x2, acca_ou, acca_gg, acca_ng, old_state.get("website_round")))
+                cursor.execute("INSERT INTO weekly_accumulators (timestamp, week, result_1x2, result_ou, result_gg, result_ng, result_un, website_round) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tracked_week, acca_1x2, acca_ou, acca_gg, acca_ng, acca_un, old_state.get("website_round")))
                 conn.commit()
-                recent_results.append({"round_id": old_state.get("website_round"), "week": tracked_week, "ou": acca_ou, "1x2": acca_1x2, "gg": acca_gg, "ng": acca_ng})
+                recent_results.append({"round_id": old_state.get("website_round"), "week": tracked_week, "ou": acca_ou, "1x2": acca_1x2, "gg": acca_gg, "ng": acca_ng, "un": acca_un})
                 del recent_results[:-RECENT_RESULTS_KEPT]
                 # The Telegram result and the sheet export are slow network calls. They run in
                 # the background so the new week's picks are not held up while betting is open.
@@ -593,15 +606,16 @@ while True:
                 selected_over = rank([m for m in scored if m["over15_confidence"] is not None and m["over15_confidence"] >= 60], "over15_confidence", 2)
                 if len(selected_over) != 2:
                     selected_over = []
+                selected_under = [m for m in rank([m for m in scored if m["over15_confidence"] is not None and m not in selected_over], "over15_confidence", len(scored))[-1:] if m["over15_confidence"] <= UNDER_MAX_OVER_CONFIDENCE]
                 for m in scored:
-                    m["website_markets"] = [key for key, group in [("over", selected_over), ("gg", selected_gg), ("ng", selected_ng), ("win", selected_win)] if m in group]
+                    m["website_markets"] = [key for key, group in [("over", selected_over), ("under", selected_under), ("gg", selected_gg), ("ng", selected_ng), ("win", selected_win)] if m in group]
                 current_live_targets = []
                 for m in scored:
-                    m["is_1x2_target"] = m in selected_win; m["is_ou_target"] = m in selected_over; m["is_gg_target"] = m in selected_gg; m["is_ng_target"] = m in selected_ng
+                    m["is_1x2_target"] = m in selected_win; m["is_ou_target"] = m in selected_over; m["is_gg_target"] = m in selected_gg; m["is_ng_target"] = m in selected_ng; m["is_un_target"] = m in selected_under
                     m["is_shortlisted"] = bool(m["website_markets"])
                     if m["is_shortlisted"]: current_live_targets.append(m)
                     week_state["all_targets"].append(m)
-                    try: cursor.execute("INSERT INTO matches (home_team, away_team, home_odds, draw_odds, away_odds, over_15_odds, gg_odds, ng_odds, prediction, prediction_ou, prediction_gg, timestamp, week, live_score, match_status, is_shortlisted, confidence, confidence_gg, website_round, website_markets, confidence_over15, goals15) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (m["home_team"], m["away_team"], m["home_odds"], m["draw_odds"], m["away_odds"], m["over_15_odds"], m["gg_odds"], m["ng_odds"], m["prediction"], "OVER 1.5", m["prediction_gg"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), current_week, "0 - 0", "UPCOMING", m["is_shortlisted"], m["ai_confidence"], m["ai_confidence_gg"] if m.get("model_valid") else None, website_round, json.dumps(m["website_markets"]), m["over15_confidence"], ("OVER" if m["over15_confidence"] >= 50 else "UNDER") if m["over15_confidence"] is not None else None))
+                    try: cursor.execute("INSERT INTO matches (home_team, away_team, home_odds, draw_odds, away_odds, over_15_odds, gg_odds, ng_odds, prediction, prediction_ou, prediction_gg, timestamp, week, live_score, match_status, is_shortlisted, confidence, confidence_gg, website_round, website_markets, confidence_over15, goals15) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (m["home_team"], m["away_team"], m["home_odds"], m["draw_odds"], m["away_odds"], m["over_15_odds"], m["gg_odds"], m["ng_odds"], m["prediction"], "OVER 1.5", m["prediction_gg"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), current_week, "0 - 0", "UPCOMING", m["is_shortlisted"], m["ai_confidence"], m["ai_confidence_gg"] if m.get("model_valid") else None, website_round, json.dumps(m["website_markets"]), m["over15_confidence"], ("OVER" if m["over15_confidence"] >= 50 and not m["is_un_target"] else "UNDER") if m["over15_confidence"] is not None else None))
                     except Exception: pass
                 conn.commit()
 
