@@ -41,7 +41,8 @@ def pct(value):
 def load():
     with sqlite3.connect(DB.resolve().as_uri() + '?mode=ro', uri=True) as connection:
         columns = {row[1] for row in connection.execute('PRAGMA table_info(matches)')}
-        optional = ['prediction', 'confidence', 'prediction_gg', 'confidence_gg', 'confidence_over15', 'website_markets', 'website_round']
+        optional = ['prediction', 'confidence', 'prediction_gg', 'confidence_gg', 'confidence_over15', 'website_markets', 'website_round',
+                    'over_15_odds', 'under_15_odds', 'gg_odds', 'ng_odds']
         select = ', '.join(name if name in columns else f'NULL AS {name}' for name in optional)
         rows = connection.execute(f"""SELECT home_team, away_team, home_odds, draw_odds, away_odds, live_score, actual_result,
             timestamp, {select} FROM matches WHERE match_status='SETTLED' AND actual_result IN ('HOME','DRAW','AWAY')
@@ -60,7 +61,15 @@ def load():
             markets = json.loads(row[13]) if row[13] else None
         except ValueError:
             markets = None
-        matches.append({'home': row[0], 'away': row[1], 'odds': odds, 'hg': hg, 'ag': ag, 'result': row[6], 'time': row[7],
+        # Real market prices exist only for rounds collected after the price reader was fixed;
+        # those rows are the ones that carry an Under 1.5 price.
+        prices = None
+        try:
+            if row[16] is not None and float(row[16]) > 1:
+                prices = {'over': float(row[15] or 0), 'under': float(row[16]), 'gg': float(row[17] or 0), 'ng': float(row[18] or 0)}
+        except (TypeError, ValueError):
+            prices = None
+        matches.append({'prices': prices,'home': row[0], 'away': row[1], 'odds': odds, 'hg': hg, 'ag': ag, 'result': row[6], 'time': row[7],
                         'round': row[14] or row[7], 'over': hg + ag >= 2, 'gg': hg > 0 and ag > 0,
                         'pred': row[8], 'conf': row[9], 'pred_gg': row[10], 'conf_gg': row[11], 'conf_over': row[12], 'markets': markets})
     return matches
@@ -209,6 +218,30 @@ def main():
             if price:
                 line += f', average odds {sum(price) / len(price):.2f}, return per 1 staked {returned / len(price):.3f} (above 1.000 is profit)'
         print(line)
+
+    priced = [m for m in matches if m['prices'] and m['markets']]
+    print(f'\n  Picks with real market prices stored: {len(priced)} (collected since the price reader was fixed)')
+    if priced:
+        print('  return per 1 staked: above 1.000 is profit, below is loss')
+        for market, won in (('under', lambda m: not m['over']), ('gg', lambda m: m['gg']), ('ng', lambda m: not m['gg'])):
+            picks = [m for m in priced if market in m['markets'] and m['prices'][market] > 1]
+            if picks:
+                average = sum(m['prices'][market] for m in picks) / len(picks)
+                returned = sum(m['prices'][market] for m in picks if won(m)) / len(picks)
+                print(f'    {market:12} {len(picks):5} picks, won {pct(sum(won(m) for m in picks) / len(picks))}, average odds {average:.2f}, return {returned:.3f}')
+        doubles = defaultdict(list)
+        for m in priced:
+            if 'over' in m['markets'] and m['prices']['over'] > 1:
+                doubles[m['round']].append(m)
+        doubles = [pair for pair in doubles.values() if len(pair) == 2]
+        if doubles:
+            combined = [pair[0]['prices']['over'] * pair[1]['prices']['over'] for pair in doubles]
+            wins = [pair[0]['over'] and pair[1]['over'] for pair in doubles]
+            print(f'    {"over double":12} {len(doubles):5} rounds, won {pct(sum(wins) / len(wins))}, average odds {sum(combined) / len(combined):.2f}, return {sum(c for c, w in zip(combined, wins) if w) / len(doubles):.3f}')
+            for floor in (1.40, 1.50, 1.60, 1.65):
+                kept = [(c, w) for c, w in zip(combined, wins) if c >= floor]
+                if kept:
+                    print(f'      only rounds at {floor:.2f} or more: {len(kept):5} rounds, won {pct(sum(w for _, w in kept) / len(kept))}, return {sum(c for c, w in kept if w) / len(kept):.3f}')
 
     print('\nC. WOULD ANOTHER MODEL RANK MATCHES BETTER?')
     print('  Trained on the oldest 80%, tested on the newest 20%. Lower log loss is better.')

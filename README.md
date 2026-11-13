@@ -4,7 +4,7 @@ This repository holds the backend that predicts Bet9ja virtual football rounds
 and the Chrome extension that places the bets. The website that shows the
 predictions lives in the separate `balls49` repository.
 
-Last updated: 13 November 2026 (extension 3.1).
+Last updated: 14 November 2026 (extension 3.2).
 
 ## How the parts fit together
 
@@ -91,7 +91,7 @@ Every call needs the `X-License-Key` header.
   page, with tabs for Over 1.5, Under 1.5, GG, NG and Win.
 - Rules and feed format: `balls49/docs/29-virtual-football-markets.md`.
 
-### Chrome extension (`bet_auto_extension/`, version 3.1)
+### Chrome extension (`bet_auto_extension/`, version 3.2)
 
 - `popup.html`, `popup.js`: licence key, base stake, take profit, stop loss,
   max loss streak, max stake, min total odds, Telegram chat id and the mode.
@@ -109,8 +109,7 @@ Every call needs the `X-License-Key` header.
 
 Stake after losses: `base + streakLoss / (odds − 1)`, so one win recovers the
 streak plus the normal profit. A round is skipped when the total odds are below
-the minimum: 1.65 by default, 1.40 for Over 1.5, or the value typed in the
-popup. The bot stops itself when it cannot find the market, the tab does not
+the minimum: 1.65 by default for every mode, or the value typed in the popup. The bot stops itself when it cannot find the market, the tab does not
 open, or a limit (take profit, stop loss, max loss streak) is reached.
 
 ## What the history says (13 November 2026, 90,620 settled matches)
@@ -163,15 +162,20 @@ Not yet proven:
    GG/NG buttons were never captured. When a name is not recognised the
    extension uses position (first button Over or GG, second Under or NG). Check
    the first ticket of each mode.
-3. **Over 1.5 minimum odds of 1.40.** Tested in the simulation only.
+3. **Whether any market pays at the real prices.** Since 14 November 2026 the
+   generator stores the real Over, Under, GG and NG prices. After about a day
+   of rounds, run `evaluate_models.py` and read "Picks with real market prices
+   stored": a return above 1.000 is profit, below is loss.
 
 Known gaps in the backend:
 
-4. **Odds for GG, NG, Over and Under are not collected reliably.**
-   `get_all_market_odds()` in `new.py` switches markets through a menu that, on
-   the real page, lists only the extra markets. The stored GG/NG odds are
-   probably wrong and `over_15_odds` is never filled. Fixing this would allow
-   an odds-based check before a pick is published.
+4. **The new price reader is not yet confirmed on the live page.**
+   `get_all_market_odds()` in `new.py` now reads the Over/Under 1.5 and GG/NG
+   panels directly and stores `over_15_odds`, `under_15_odds`, `gg_odds` and
+   `ng_odds`. Check the log line `Market prices read:`; the Over/Under and
+   GG/NG counts should equal the 1X2 count. GG/NG prices stored before
+   14 November 2026 are unreliable. Once confirmed, the prices can be used
+   to skip a pick whose price is too low to pay.
 5. **No dedicated Under 1.5 model.** A model trained for Under, or a rule that
    uses real Under odds, would be a better basis than "lowest Over confidence".
 6. **Loss streaks reset on restart.** The generator keeps them in memory, so

@@ -395,45 +395,36 @@ def extract_odds_js(market_size):
     try: return driver.execute_script(js) or []
     except: return []
 
+def extract_tab_odds_js():
+    # Over/Under 1.5 and GG/NG live in their own tab panels. Every panel is in the page at
+    # once, so the prices are read straight from the panel without clicking anything.
+    js = r"""const res=[];const names=(r)=>{let tn=[];for(const s of r.querySelectorAll('td div.badge-market.w-30')){const t=s.textContent.trim();if(t&&t!=='-')tn.push(t);}if(tn.length<2){tn=[];for(const s of r.querySelectorAll('td .badge-market')){const t=s.textContent.trim();if(t&&t!=='-')tn.push(t);}}return tn;};const price=(i)=>{let v=parseFloat(i.value);if(!(v>1)){const l=i.id?document.querySelector('label[for="'+i.id+'"]'):null;v=l?parseFloat(l.textContent.trim()):NaN;}return v>1?v:0;};for(const market of ['Over_Under_1_5','GoalGoal_NoGoal']){const panel=document.getElementById('tab_id_'+market);const inputs=panel?panel.querySelectorAll('input.checkbox_bets'):document.querySelectorAll('input.checkbox_bets[data-marketid="'+market+'"]');const rows=new Set();for(const i of inputs){if(i.dataset.marketid&&i.dataset.marketid!==market)continue;const r=i.closest('tr');if(r)rows.add(r);}for(const r of rows){const c=[...r.querySelectorAll('input.checkbox_bets')].filter(i=>!i.dataset.marketid||i.dataset.marketid===market);if(c.length!==2)continue;const tn=names(r);if(tn.length<2)continue;res.push({market:market,home_team:tn[0],away_team:tn[1],odd1:price(c[0]),odd2:price(c[1]),name1:c[0].dataset.oddid||'',name2:c[1].dataset.oddid||''});}}return res;"""
+    try: return driver.execute_script(js) or []
+    except: return []
+
 def get_all_market_odds():
-    m_1x2 = extract_raw_odds_js()
-    
-    # 1. Switch to Over/Under 2.5
-    try: driver.execute_script("const el=document.getElementById('bet-select-market'); if(el){el.value='Over_Under_2_5'; el.dispatchEvent(new Event('change'));}")
-    except: pass
-    time.sleep(1.5)
-    m_ou = extract_odds_js(2) # m_ou will now contain Over 2.5 odds
-    
-    # 2. Switch to GG/NG
-    try: driver.execute_script("const el=document.getElementById('bet-select-market'); if(el){el.value='GoalGoal_NoGoal'; el.dispatchEvent(new Event('change'));}")
-    except: pass
-    time.sleep(1.5)
-    m_gg = extract_odds_js(2) # m_gg will now contain GG/NG odds
-    
-    # Return to Main
-    try: driver.execute_script("const el=document.getElementById('bet-select-market'); if(el){el.value='Match_Result'; el.dispatchEvent(new Event('change'));}")
-    except: pass
-    time.sleep(1.0)
-    
     merged = {}
-    for m in m_1x2:
-        key = f"{m['home_team']}_{m['away_team']}"
-        merged[key] = {
-            "home_team": m['home_team'], "away_team": m['away_team'], 
-            "home_odds": m['home_odds'], "draw_odds": m['draw_odds'], "away_odds": m['away_odds'], 
-            "ou_25_odds": 0.0, "gg_odds": 0.0, "ng_odds": 0.0
+    for m in extract_raw_odds_js():
+        merged[f"{m['home_team']}_{m['away_team']}"] = {
+            "home_team": m['home_team'], "away_team": m['away_team'],
+            "home_odds": m['home_odds'], "draw_odds": m['draw_odds'], "away_odds": m['away_odds'],
+            "over_15_odds": 0.0, "under_15_odds": 0.0, "gg_odds": 0.0, "ng_odds": 0.0
         }
-        
-    for m in m_ou:
-        key = f"{m['home_team']}_{m['away_team']}"
-        if key in merged: merged[key]['ou_25_odds'] = m['odd1'] # Correctly mapping Over 2.5 odds
-        
-    for m in m_gg:
-        key = f"{m['home_team']}_{m['away_team']}"
-        if key in merged: 
-            merged[key]['gg_odds'] = m['odd1']  # Correctly mapping GG odds
-            merged[key]['ng_odds'] = m['odd2']  # Correctly mapping NG odds
-            
+    found = {"Over_Under_1_5": 0, "GoalGoal_NoGoal": 0}
+    for m in extract_tab_odds_js():
+        row = merged.get(f"{m['home_team']}_{m['away_team']}")
+        try: first, second = float(m['odd1']), float(m['odd2'])
+        except (TypeError, ValueError): continue
+        if not row or not (first > 1 and second > 1): continue
+        if m['market'] == 'Over_Under_1_5':
+            # Two or more goals is the likelier outcome in every fixture, so Over 1.5 is the
+            # shorter price whichever order the page lists the two buttons in.
+            row['over_15_odds'], row['under_15_odds'] = min(first, second), max(first, second)
+        else:
+            if re.search(r'(^|_)(ng|nogoal|no)$', str(m.get('name1', '')), re.I): first, second = second, first
+            row['gg_odds'], row['ng_odds'] = first, second
+        found[m['market']] += 1
+    if merged: print(f"Market prices read: 1X2 {len(merged)}, Over/Under 1.5 {found['Over_Under_1_5']}, GG/NG {found['GoalGoal_NoGoal']}", flush=True)
     return list(merged.values())
 
 def calculate_dynamic_form(team_name, db_cursor, window=3):
@@ -475,7 +466,7 @@ def predict_with_ai(raw_matches):
             pred_class_gg = "GG" if gg_chance >= 50 else "NG"; confidence_gg = max(gg_chance, 100 - gg_chance)
         scored.append({
             "home_team": ht, "away_team": at, "home_odds": ho, "draw_odds": do, "away_odds": ao,
-            "over_15_odds": m.get("over_15_odds", 0.0), "gg_odds": m.get("gg_odds", 0.0), "ng_odds": m.get("ng_odds", 0.0),
+            "over_15_odds": m.get("over_15_odds", 0.0), "under_15_odds": m.get("under_15_odds", 0.0), "gg_odds": m.get("gg_odds", 0.0), "ng_odds": m.get("ng_odds", 0.0),
             "prediction": pred_class, "prediction_ou": "OVER 1.5", "ai_confidence": confidence,
             "prediction_gg": pred_class_gg, "ai_confidence_gg": confidence_gg, "model_valid": model_valid,
             "over15_confidence": predict_over15(ai_model_over15, m),
@@ -490,7 +481,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS matches (id INTEGER PRIMARY KEY AUTOI
 cursor.execute("CREATE TABLE IF NOT EXISTS weekly_accumulators (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, week TEXT, result_1x2 TEXT, result_ou TEXT)")
 cursor.execute("PRAGMA table_info(matches)")
 existing_columns = [row[1] for row in cursor.fetchall()]
-for col, col_type in [("confidence_over15", "REAL"), ("goals15", "TEXT"), ("website_markets", "TEXT"), ("website_round", "TEXT"), ("confidence_gg", "REAL"), ("prediction_ou", "TEXT"), ("prediction_ou_status", "TEXT"), ("prediction_gg", "TEXT"), ("over_15_odds", "REAL"), ("gg_odds", "REAL"), ("ng_odds", "REAL")]:
+for col, col_type in [("confidence_over15", "REAL"), ("goals15", "TEXT"), ("website_markets", "TEXT"), ("website_round", "TEXT"), ("confidence_gg", "REAL"), ("prediction_ou", "TEXT"), ("prediction_ou_status", "TEXT"), ("prediction_gg", "TEXT"), ("over_15_odds", "REAL"), ("gg_odds", "REAL"), ("ng_odds", "REAL"), ("under_15_odds", "REAL")]:
     if col not in existing_columns: cursor.execute(f"ALTER TABLE matches ADD COLUMN {col} {col_type}")
 cursor.execute("PRAGMA table_info(weekly_accumulators)")
 acc_cols = [row[1] for row in cursor.fetchall()]
@@ -622,7 +613,7 @@ while True:
                     m["is_shortlisted"] = bool(m["website_markets"])
                     if m["is_shortlisted"]: current_live_targets.append(m)
                     week_state["all_targets"].append(m)
-                    try: cursor.execute("INSERT INTO matches (home_team, away_team, home_odds, draw_odds, away_odds, over_15_odds, gg_odds, ng_odds, prediction, prediction_ou, prediction_gg, timestamp, week, live_score, match_status, is_shortlisted, confidence, confidence_gg, website_round, website_markets, confidence_over15, goals15) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (m["home_team"], m["away_team"], m["home_odds"], m["draw_odds"], m["away_odds"], m["over_15_odds"], m["gg_odds"], m["ng_odds"], m["prediction"], "OVER 1.5", m["prediction_gg"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), current_week, "0 - 0", "UPCOMING", m["is_shortlisted"], m["ai_confidence"], m["ai_confidence_gg"] if m.get("model_valid") else None, website_round, json.dumps(m["website_markets"]), m["over15_confidence"], ("OVER" if m["over15_confidence"] >= 50 and not m["is_un_target"] else "UNDER") if m["over15_confidence"] is not None else None))
+                    try: cursor.execute("INSERT INTO matches (home_team, away_team, home_odds, draw_odds, away_odds, over_15_odds, under_15_odds, gg_odds, ng_odds, prediction, prediction_ou, prediction_gg, timestamp, week, live_score, match_status, is_shortlisted, confidence, confidence_gg, website_round, website_markets, confidence_over15, goals15) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (m["home_team"], m["away_team"], m["home_odds"], m["draw_odds"], m["away_odds"], m["over_15_odds"], m["under_15_odds"] or None, m["gg_odds"], m["ng_odds"], m["prediction"], "OVER 1.5", m["prediction_gg"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), current_week, "0 - 0", "UPCOMING", m["is_shortlisted"], m["ai_confidence"], m["ai_confidence_gg"] if m.get("model_valid") else None, website_round, json.dumps(m["website_markets"]), m["over15_confidence"], ("OVER" if m["over15_confidence"] >= 50 and not m["is_un_target"] else "UNDER") if m["over15_confidence"] is not None else None))
                     except Exception: pass
                 conn.commit()
 
