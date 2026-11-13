@@ -36,6 +36,7 @@ round and nothing downstream chooses again.
 | `publish_site_feed.py` | Reads `matches.db` and posts a signed snapshot to the website every 10 seconds. It passes the picks through unchanged. |
 | `over15_model.py`, `train_model_over15.py` | The Over 1.5 goals model and its trainer. The trained file `ai_brain_over15.pkl` is not in Git; it is created on the VPS. |
 | `train_model.py`, `train_model_gg.py` | Trainers for the Win model (`ai_brain.pkl`) and the GG/NG model (`ai_brain_gg.pkl`). Both model files are in Git. |
+| `evaluate_models.py` | Read-only report: how the published predictions have done and whether another model type would rank matches better. Changes nothing. |
 | `auto_trainer.py` | Retrains the models on a timer. It has no systemd service; it only runs if started by hand. |
 | `deploy/` | VPS installer, the two systemd services, the Nginx routes and an example environment file. See `DEPLOYMENT.md`. |
 
