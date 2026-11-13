@@ -1,5 +1,7 @@
 # Virtual Football VPS deployment
 
+For what each part of the project does, see `README.md`.
+
 The virtual generator remains in this repository. A separate publisher reads its
 SQLite match database and sends a signed snapshot to the Balls49 website. The
 website never connects directly to the generator's database.
@@ -19,7 +21,11 @@ website API and maps `/virtual-api/` to the private Flask API on localhost.
 ## Prepare the virtual worker
 
 The worker requires a headless Chrome/Chromium installation, Python 3, outbound
-HTTPS access, and the tracked AI model files. Keep runtime files and credentials
+HTTPS access, and the AI model files. `ai_brain.pkl` and `ai_brain_gg.pkl` are
+tracked; `ai_brain_over15.pkl` is not and must be trained on the VPS with
+`python train_model_over15.py` (see the Over 1.5 section of
+`balls49/docs/29-virtual-football-markets.md`). Without it there are no Over 1.5
+and no Under 1.5 picks. Keep runtime files and credentials
 out of GitHub. In particular, do not commit `.env`, `credentials.json`, or a
 live `matches.db`.
 
@@ -72,6 +78,31 @@ its API now uses the VPS HTTPS origin. Virtual Football predictions appear at
 
 Keep the SQLite database in `/var/lib/balls49-virtual`; never pull code into the
 data directory. After pulling code in `/home/balls49/virtualFootball`, rerun
-`bash deploy/install-vps.sh` to update dependencies and restart the services.
+`bash deploy/install-vps.sh` to update dependencies and restart the services:
+
+```bash
+cd /home/balls49/virtualFootball && git pull --ff-only origin main && bash deploy/install-vps.sh
+```
+
+Installers older than 13 November 2026 only started the services when they were
+stopped, so a running generator kept the old code. If a change does not show up,
+restart by hand:
+
+```bash
+sudo systemctl restart balls49-virtual balls49-virtual-feed
+```
+
+A restart interrupts the generator briefly; the round in progress may not be
+settled.
+
 Use the separate Balls49 site deployment process for website API or frontend
-changes.
+changes. When a change adds something to the feed (a new market, a new field),
+deploy the website first: an older website rejects snapshots it does not
+understand and the feed stops until it is updated.
+
+To confirm an update, open `https://159.65.25.30/public-virtual-football` and
+check the newest round for the new data. It appears from the first round that
+starts after the restart.
+
+After an extension change, reload the extension in `chrome://extensions`, reload
+the Bet9ja tab and press Start. The current extension version is 3.1.
