@@ -75,9 +75,8 @@ current_loss_streak_1x2 = 0
 current_loss_streak_gg = 0
 current_loss_streak_ng = 0
 current_loss_streak_un = 0
-# Under 1.5 has no model of its own: the pick is the round's lowest Over 1.5 confidence,
-# and only when that confidence is at most this. The website enforces the same limit.
-UNDER_MAX_OVER_CONFIDENCE = 65
+# Under 1.5 has no model of its own: every round the pick is the match with the
+# lowest Over 1.5 confidence, whatever that confidence is.
 pending_commands = []
 last_known_ext_state = {"botEnabled": False, "baseStake": 100, "takeProfit": 0, "stopLoss": 0, "totalProfit": 0.0, "bettingMode": "OU"}
 
@@ -606,7 +605,7 @@ while True:
                 selected_over = rank([m for m in scored if m["over15_confidence"] is not None and m["over15_confidence"] >= 60], "over15_confidence", 2)
                 if len(selected_over) != 2:
                     selected_over = []
-                selected_under = [m for m in rank([m for m in scored if m["over15_confidence"] is not None and m not in selected_over], "over15_confidence", len(scored))[-1:] if m["over15_confidence"] <= UNDER_MAX_OVER_CONFIDENCE]
+                selected_under = [m for m in rank([m for m in scored if m["over15_confidence"] is not None and m not in selected_over], "over15_confidence", len(scored))[-1:]]
                 for m in scored:
                     m["website_markets"] = [key for key, group in [("over", selected_over), ("under", selected_under), ("gg", selected_gg), ("ng", selected_ng), ("win", selected_win)] if m in group]
                 current_live_targets = []
