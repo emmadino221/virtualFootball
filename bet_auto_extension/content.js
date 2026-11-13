@@ -412,7 +412,14 @@ async function settlePendingBet(results) {
     const outcome = entry ? entry[RESULT_KEYS[bet.mode]] : null;
 
     if (outcome !== 'WIN' && outcome !== 'LOSS') {
-        const waiting = !entry && bet.placedAt && Date.now() - bet.placedAt < PENDING_TIMEOUT_MS;
+        // The server reports a round when the page moves on to the next week. Once the page
+        // is a further week on and the round is still missing (the generator was restarted
+        // mid-round, say), the result is never coming.
+        const weekEl = getIframeDoc().querySelector(SELECTORS.currentWeek);
+        const pageWeek = weekEl ? parseInt(normalizeWeek(weekEl.innerText), 10) : NaN;
+        const betWeek = parseInt(normalizeWeek(bet.week), 10);
+        const stillDue = isNaN(pageWeek) || isNaN(betWeek) || pageWeek === betWeek || pageWeek === betWeek + 1 || (pageWeek === 1 && betWeek > 1);
+        const waiting = !entry && bet.placedAt && stillDue && Date.now() - bet.placedAt < PENDING_TIMEOUT_MS;
         if (waiting) return true;
         await chrome.storage.local.set({ pendingBet: null });
         addLogEntry(`Result unknown for ${bet.week || 'last bet'} - not counted, check Bet9ja`);
