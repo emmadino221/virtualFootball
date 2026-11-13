@@ -29,7 +29,8 @@ DB_PATH = Path(os.getenv("VIRTUAL_DB_PATH", BASE_DIR / "matches.db")).expanduser
 AI_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_MODEL_PATH", BASE_DIR / "ai_brain.pkl")).expanduser()
 AI_GG_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_GG_MODEL_PATH", BASE_DIR / "ai_brain_gg.pkl")).expanduser()
 AI_OVER15_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_OVER15_MODEL_PATH", BASE_DIR / "ai_brain_over15.pkl")).expanduser()
-ai_model_over15 = None
+try: ai_model_over15 = joblib.load(AI_OVER15_MODEL_PATH)
+except Exception: ai_model_over15 = None
 
 GOOGLE_CREDENTIALS_FILE = Path(os.getenv("GOOGLE_CREDENTIALS_FILE", BASE_DIR / "credentials.json")).expanduser()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -535,7 +536,6 @@ while True:
                     cursor.execute("UPDATE matches SET actual_result=?, prediction_status=?, prediction_ou_status=?, live_score=?, match_status=? WHERE week=? AND home_team=? AND away_team=? AND website_round=?", (ao, target["status"], target["ou_status"], fs, "SETTLED" if fs is not None else "NO_SCORE", tracked_week, target["home_team"], target["away_team"], old_state.get("website_round")))
                     if target.get("is_shortlisted"): shortlisted_targets.append(target)
                 conn.commit()
-                if old_state.get("message_id") and shortlisted_targets: update_telegram_settlement(old_state.get("message_id"), tracked_week, shortlisted_targets)
 
                 acca_1x2 = market_result(shortlisted_targets, "is_1x2_target", "status", 1)
                 acca_ou = market_result(shortlisted_targets, "is_ou_target", "ou_status", 2)
@@ -550,22 +550,18 @@ while True:
                 conn.commit()
                 recent_results.append({"round_id": old_state.get("website_round"), "week": tracked_week, "ou": acca_ou, "1x2": acca_1x2, "gg": acca_gg, "ng": acca_ng})
                 del recent_results[:-RECENT_RESULTS_KEPT]
-                stats = get_current_stats()
-                if stats:
-                    stats_for_export = {"acca_1x2": acca_1x2, "acca_ou": acca_ou, "acca_gg": acca_gg, "win_rate_1x2": stats["wr_1x2"], "max_streak_1x2": stats["ml_1x2"], "win_rate_ou": stats["wr_ou"], "max_streak_ou": stats["ml_ou"], "win_rate_gg": stats["wr_gg"], "max_streak_gg": stats["ml_gg"]}
-                    safe_google_export(tracked_week, shortlisted_targets, stats_for_export, old_state["all_targets"])
+                # The Telegram result and the sheet export are slow network calls. They run in
+                # the background so the new week's picks are not held up while betting is open.
+                def report_settlement(message_id=old_state.get("message_id"), week=tracked_week, shortlisted=shortlisted_targets, everything=old_state["all_targets"], accas={"acca_1x2": acca_1x2, "acca_ou": acca_ou, "acca_gg": acca_gg}):
+                    try:
+                        if message_id and shortlisted: update_telegram_settlement(message_id, week, shortlisted)
+                        stats = get_current_stats()
+                        if stats:
+                            safe_google_export(week, shortlisted, {**accas, "win_rate_1x2": stats["wr_1x2"], "max_streak_1x2": stats["ml_1x2"], "win_rate_ou": stats["wr_ou"], "max_streak_ou": stats["ml_ou"], "win_rate_gg": stats["wr_gg"], "max_streak_gg": stats["ml_gg"]}, everything)
+                    except Exception as e: print(f"🔴 Settlement report error: {e}")
+                threading.Thread(target=report_settlement, daemon=True).start()
                 old_state["fully_settled"] = True
         tracked_week = current_week
-
-        try:
-            new_ai = joblib.load(AI_MODEL_PATH); ai_model = new_ai['model']; ai_encoder = new_ai['encoder']
-            new_ai_gg = joblib.load(AI_GG_MODEL_PATH); ai_model_gg = new_ai_gg['model']
-        except Exception: pass
-        
-        try:
-            ai_model_over15 = joblib.load(AI_OVER15_MODEL_PATH)
-        except Exception:
-            ai_model_over15 = None
 
         fast_check = extract_raw_odds_js()
         if not fast_check:
@@ -611,9 +607,23 @@ while True:
 
         if week_state["all_targets"] and not week_state["prediction_sent"]:
             targets_to_send = [t for t in week_state["all_targets"] if t.get("is_shortlisted")]
-            msg_id = send_or_update_shortlist(week_state.get("message_id"), current_week, targets_to_send)
-            week_state.update({"message_id": msg_id, "prediction_sent": True}); current_round_id = week_state.get("website_round"); current_ready_week = current_week  
-            print(f"✨ AI Sent Signals for {current_week} to Telegram.")
+            # Release the picks to the betting extension first; Telegram can take seconds.
+            current_round_id = week_state.get("website_round"); current_ready_week = current_week
+            week_state["prediction_sent"] = True
+            print(f"✨ AI picks ready for {current_week}.", flush=True)
+            week_state["message_id"] = send_or_update_shortlist(week_state.get("message_id"), current_week, targets_to_send)
+            print(f"✨ AI Sent Signals for {current_week} to Telegram.", flush=True)
+
+            # Pick up retrained models once per week, after the picks are out, instead of on
+            # every pass of the loop.
+            try:
+                new_ai = joblib.load(AI_MODEL_PATH); ai_model = new_ai['model']; ai_encoder = new_ai['encoder']
+                new_ai_gg = joblib.load(AI_GG_MODEL_PATH); ai_model_gg = new_ai_gg['model']
+            except Exception: pass
+            try:
+                ai_model_over15 = joblib.load(AI_OVER15_MODEL_PATH)
+            except Exception:
+                ai_model_over15 = None
 
         for parsed in get_live_scores_js():
             for target in week_state["all_targets"]:
