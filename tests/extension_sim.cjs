@@ -185,6 +185,25 @@ const BET = ',place,confirm,close';
     assert.equal(await run(payload('OU', 'r12f', [A, B])), 'ASV:Over_Under_1_5:OVER,TOT:Over_Under_1_5:OVER' + BET);
     store.pendingBet = null; page.options = realOptions;
 
+    // Over 2.5 single: chosen from the market menu, the Over button, one match, settled from "o25".
+    nextWeek(); page.overOdds = ['1.80', '1.90'];
+    assert.equal(await run(payload('O25', 'o1', [B])), 'TOT:Over_Under_2_5:OVER' + BET);
+    assert.equal(store.pendingBet.mode, 'O25');
+    assert.equal(select.value, 'Over_Under_2_5');
+    nextWeek();
+    assert.equal(await run(payload('O25', 'o2', [A], [{ round_id: 'o1', o25: 'WIN' }])), 'ASV:Over_Under_2_5:OVER' + BET);
+    assert.equal(store.localLossStreak, 0);
+    assert.equal(store.pendingBet.stake, 100);            // a win puts the stake back to base
+    nextWeek();
+    assert.equal(await run(payload('O25', 'o3', [], [{ round_id: 'o2', o25: 'LOSS' }])), '');   // no pick this round
+    assert.equal(store.localLossStreak, 1);
+    // The page has no Over 2.5 market: stop, never bet the 1.5 line instead.
+    nextWeek(); page.options = realOptions.filter(option => option !== 'Over_Under_2_5');
+    assert.equal(await run(payload('O25', 'o4', [A])), '');
+    assert.equal(store.botEnabled, false);
+    assert.equal(store.pendingBet, null);
+    page.options = realOptions; page.overOdds = ['1.30', '1.35']; store.botEnabled = true;
+
     // Server without website picks: never bets.
     nextWeek(); page.ticketVisible = true; store.botEnabled = true;
     assert.equal(await run({ ...payload('GG', 'r13', [A]), serverSupported: false }), '');

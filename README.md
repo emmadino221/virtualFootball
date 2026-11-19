@@ -4,7 +4,7 @@ This repository holds the backend that predicts Bet9ja virtual football rounds
 and the Chrome extension that places the bets. The website that shows the
 predictions lives in the separate `balls49` repository.
 
-Last updated: 14 November 2026 (extension 3.2).
+Last updated: 19 November 2026 (extension 3.3, Over 2.5).
 
 ## How the parts fit together
 
@@ -47,7 +47,7 @@ round and nothing downstream chooses again.
 | Market | Rule | Picks |
 | --- | --- | --- |
 | Over 1.5 | The two highest Over 1.5 confidences, each at least 60%. Fewer than two means the round is skipped. | 2 or 0 |
-| Over 2.5 | The highest Over 2.5 confidence of the round, only at 50% or more. Wins on 3+ goals. Website and Telegram only; no extension mode yet. | 1 or 0 |
+| Over 2.5 | The highest Over 2.5 confidence of the round, only at 50% or more. Wins on 3+ goals. Website, Telegram and the extension's Over 2.5 Single mode. | 1 or 0 |
 | Under 1.5 | The match with the lowest Over 1.5 confidence, whatever the percentage. Never one of the Over picks. | 1 |
 | GG | Highest-confidence GG prediction. | 1 or 0 |
 | NG | Highest-confidence NG prediction. | 1 or 0 |
@@ -78,7 +78,7 @@ Every call needs the `X-License-Key` header.
 ### Telegram commands
 
 `/start`, `/stop`, `/stake <amount>`, `/tp <amount>`, `/sl <amount>`,
-`/mode OU|UN|1X2|GG|NG`, `/reset`, `/history`, `/status`.
+`/mode OU|O25|UN|1X2|GG|NG`, `/reset`, `/history`, `/status`.
 
 ## Frontend
 
@@ -93,7 +93,7 @@ Every call needs the `X-License-Key` header.
   page, with tabs for Over 1.5, Under 1.5, GG, NG and Win.
 - Rules and feed format: `balls49/docs/29-virtual-football-markets.md`.
 
-### Chrome extension (`bet_auto_extension/`, version 3.2)
+### Chrome extension (`bet_auto_extension/`, version 3.3)
 
 - `popup.html`, `popup.js`: licence key, base stake, take profit, stop loss,
   max loss streak, max stake, min total odds, Telegram chat id and the mode.
@@ -104,6 +104,7 @@ Every call needs the `X-License-Key` header.
 | Mode | Bet9ja tab | Ticks |
 | --- | --- | --- |
 | Over 1.5 Double | Over/Under 1.5 | Over on two matches |
+| Over 2.5 Single | Over/Under 2.5 (market menu) | Over on one match |
 | Under 1.5 Single | Over/Under 1.5 | Under on one match |
 | Win Single | Match Result | Home or Away |
 | GG Single | GG/NG | GG |
@@ -191,11 +192,17 @@ Known gaps in the backend:
    (`test_publish_site_feed.py`). The extension has a simulation in
    `tests/extension_sim.cjs`.
 
+10. **Over 2.5 market on Bet9ja not yet seen by the bot.** The extension looks for
+    `Over_Under_2_5` in the market menu, as the extension simulation models the
+    page. If Bet9ja names it differently, the bot stops before ticking anything
+    and its message lists the market values the page has; check the first
+    Over 2.5 ticket by hand.
+
 Housekeeping:
 
-10. **`bet_auto_extension.zip` and `work.py`** are still tracked in Git but
+11. **`bet_auto_extension.zip` and `work.py`** are still tracked in Git but
     deleted in the local working copy. Decide whether to remove them for good
     or rebuild the zip from the current extension.
-11. **The site runs on a bare IP address** (`159.65.25.30`). A domain name
+12. **The site runs on a bare IP address** (`159.65.25.30`). A domain name
     would need updates in `content.js`, `popup.js`, `manifest.json` and the
     installer.

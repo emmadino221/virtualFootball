@@ -229,7 +229,7 @@ def handle_telegram_command(text, req_chat_id):
         except: send_telegram_message("⚠️ <b>ERROR:</b> Invalid amount.", req_chat_id)
     elif main_cmd == "/mode" and len(cmd) > 1:
         new_mode = cmd[1].upper()
-        if new_mode in ["OU", "1X2", "GG", "NG", "UN"]:
+        if new_mode in ["OU", "1X2", "GG", "NG", "UN", "O25"]:
             pending_commands.append({"type": "MODE", "value": new_mode})
             send_telegram_message(f"⚙️ <b>COMMAND RECEIVED:</b> Strategy switched to {new_mode}", req_chat_id)
     elif main_cmd == "/reset":
