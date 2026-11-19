@@ -62,7 +62,8 @@ class SessionTests(unittest.TestCase):
         self.assertNotIn("minOdds", state)
         self.assertNotIn("evil", state)
         self.assertEqual(state["baseStake"], 150.0)
-        self.assertEqual(state["pendingBet"], {"stake": 300.0, "week": "Week 12", "mode": "O25"})
+        self.assertEqual(state["pendingBet"], {"stake": 300.0, "week": "Week 12", "mode": "O25", "roundId": "x",
+                                               "odds": None, "picks": [], "placedAt": None})
         self.assertIsNone(clean_state({"pendingBet": None})["pendingBet"])
 
     def test_telegram_chats_reach_only_their_own_extension(self):

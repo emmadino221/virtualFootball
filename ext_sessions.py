@@ -34,6 +34,27 @@ def _text(value, limit=40):
     return str(value)[:limit] if isinstance(value, (str, int, float)) and not isinstance(value, bool) else None
 
 
+HISTORY_KEPT = 30
+OUTCOMES = ("WIN", "LOSS", "UNKNOWN")
+
+
+def clean_bet(bet):
+    """A placed bet as the extension reports it: what, how much, and how it ended."""
+    picks = []
+    for pick in (bet.get("picks") if isinstance(bet.get("picks"), list) else [])[:3]:
+        if isinstance(pick, dict) and _text(pick.get("home"), 10) and _text(pick.get("away"), 10):
+            picks.append({"home": _text(pick.get("home"), 10), "away": _text(pick.get("away"), 10), "pick": _text(pick.get("pick"), 20)})
+    clean = {"stake": _number(bet.get("stake")), "week": _text(bet.get("week")),
+             "mode": bet.get("mode") if bet.get("mode") in MODES else None,
+             "roundId": _text(bet.get("roundId"), 64), "odds": _number(bet.get("odds")), "picks": picks,
+             "placedAt": _number(bet.get("placedAt"))}
+    if "outcome" in bet:
+        clean["outcome"] = bet.get("outcome") if bet.get("outcome") in OUTCOMES else "UNKNOWN"
+        clean["profit"] = _number(bet.get("profit"))
+        clean["settledAt"] = _number(bet.get("settledAt"))
+    return clean
+
+
 def clean_state(data):
     """Keep only known fields with sane types from what an extension reports."""
     state = {}
@@ -48,10 +69,10 @@ def clean_state(data):
                 state[field] = number
     if "pendingBet" in data:
         bet = data["pendingBet"]
-        state["pendingBet"] = None
-        if isinstance(bet, dict) and _number(bet.get("stake")) is not None:
-            state["pendingBet"] = {"stake": _number(bet.get("stake")), "week": _text(bet.get("week")),
-                                   "mode": bet.get("mode") if bet.get("mode") in MODES else None}
+        state["pendingBet"] = clean_bet(bet) if isinstance(bet, dict) and _number(bet.get("stake")) is not None else None
+    if isinstance(data.get("betHistory"), list):
+        valid = [b for b in data["betHistory"][:100] if isinstance(b, dict) and _number(b.get("stake")) is not None]
+        state["betHistory"] = [clean_bet(b) for b in valid[:HISTORY_KEPT]]
     version = _text(data.get("extensionVersion"), 20)
     if version:
         state["extensionVersion"] = version

@@ -98,6 +98,8 @@ const BET = ',place,confirm,close';
     assert.equal(await run(payload('OU', 'r1', [A, B])), 'ASV:Over_Under_1_5:OVER,TOT:Over_Under_1_5:OVER' + BET);
     assert.equal(store.pendingBet.mode, 'OU');
     assert.equal(store.pendingBet.profit, 76);            // 100 x (1.30 x 1.35 = 1.76 rounded) - 100
+    assert.deepEqual(store.pendingBet.picks.map(p => [p.home, p.away]), [['ASV', 'LEE'], ['TOT', 'EVE']]);
+    assert.equal(store.pendingBet.odds, 1.76);
     assert.equal(await run(payload('OU', 'r1', [A, B])), '');   // no repeat on the same week
 
     // Next week open but the result has not arrived yet: wait, do not bet.
@@ -107,6 +109,11 @@ const BET = ',place,confirm,close';
     // Result arrives as a loss; the website published no Over pair this round -> no bet.
     assert.equal(await run(payload('OU', 'r2', [], [{ round_id: 'r1', ou: 'LOSS' }])), '');
     assert.equal(store.localLossStreak, 1);
+    // The settled bet is in the history the dashboard shows, with its matches.
+    assert.equal(store.betHistory[0].roundId, 'r1');
+    assert.equal(store.betHistory[0].outcome, 'LOSS');
+    assert.equal(store.betHistory[0].profit, -100);
+    assert.equal(store.betHistory[0].picks.length, 2);
     assert.equal(await run(payload('OU', 'r2', [A])), '');      // a single leg is never bet
 
     // Combined odds under the minimum -> skipped, nothing clicked.

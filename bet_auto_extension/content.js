@@ -295,11 +295,15 @@ function getIframeDoc() {
     return iframe ? iframe.contentDocument : document;
 }
 
+const lastSentHistory = { json: '', at: 0 };
 async function fetchAIData() {
     const empty = { ok: false, targets: [], mode: 'OU', readyWeek: null, roundId: null, results: [], serverSupported: true };
     try {
         const st = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'totalProfit', 'bettingMode', 'licenseKey', 'chatId',
-            'localLossStreak', 'streakLoss', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'maxLossStreak', 'maxStake', 'minOdds', 'pendingBet']);
+            'localLossStreak', 'streakLoss', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'maxLossStreak', 'maxStake', 'minOdds', 'pendingBet', 'betHistory']);
+        // The history is sent when it changes, and at least once a minute in case the server restarted.
+        const historyJson = JSON.stringify((st.betHistory || []).slice(0, 30));
+        const sendHistory = historyJson !== lastSentHistory.json || Date.now() - lastSentHistory.at > 60000;
         const currentMode = st.bettingMode || 'OU';
 
         const response = await virtualApiFetch('/sync', {
@@ -325,7 +329,8 @@ async function fetchAIData() {
                 maxLossStreak: parseInt(st.maxLossStreak, 10) || 0,
                 maxStake: parseFloat(st.maxStake) || 0,
                 minOdds: parseFloat(st.minOdds) > 1 ? parseFloat(st.minOdds) : DEFAULT_MIN_ODDS,
-                pendingBet: st.pendingBet ? { stake: st.pendingBet.stake, week: st.pendingBet.week, mode: st.pendingBet.mode } : null,
+                pendingBet: st.pendingBet ? { stake: st.pendingBet.stake, week: st.pendingBet.week, mode: st.pendingBet.mode, roundId: st.pendingBet.roundId, odds: st.pendingBet.odds, picks: st.pendingBet.picks, placedAt: st.pendingBet.placedAt } : null,
+                ...(sendHistory ? { betHistory: JSON.parse(historyJson) } : {}),
                 extensionVersion: chrome.runtime.getManifest ? chrome.runtime.getManifest().version : ''
             })
         });
@@ -335,6 +340,7 @@ async function fetchAIData() {
             return empty;
         }
         if (!response.ok) return empty;
+        if (sendHistory) Object.assign(lastSentHistory, { json: historyJson, at: Date.now() });
 
         const data = await response.json();
 
@@ -422,6 +428,20 @@ async function triggerCircuitBreaker(reason) {
 
 // Settles the bet this browser actually placed, using the result of the exact round it was
 // placed on. Returns true while that result is still outstanding.
+// The bets this browser placed, newest first, for the website dashboard's Activity tab.
+const BET_HISTORY_KEPT = 50;
+async function recordBetHistory(bet, outcome) {
+    const { betHistory } = await chrome.storage.local.get(['betHistory']);
+    const entry = {
+        roundId: bet.roundId || null, week: bet.week || '', mode: bet.mode, stake: bet.stake, odds: bet.odds || null,
+        picks: Array.isArray(bet.picks) ? bet.picks : [], outcome,
+        profit: outcome === 'WIN' ? bet.profit : outcome === 'LOSS' ? -bet.stake : 0,
+        placedAt: bet.placedAt || null, settledAt: Date.now()
+    };
+    const earlier = (Array.isArray(betHistory) ? betHistory : []).filter(e => !(entry.roundId && e.roundId === entry.roundId && e.mode === entry.mode));
+    await chrome.storage.local.set({ betHistory: [entry, ...earlier].slice(0, BET_HISTORY_KEPT) });
+}
+
 async function settlePendingBet(results) {
     const st = await chrome.storage.local.get(['pendingBet', 'totalProfit', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'localLossStreak', 'streakLoss', 'chatId', 'licenseKey']);
     const bet = st.pendingBet;
@@ -440,6 +460,7 @@ async function settlePendingBet(results) {
         const stillDue = isNaN(pageWeek) || isNaN(betWeek) || pageWeek === betWeek || pageWeek === betWeek + 1 || (pageWeek === 1 && betWeek > 1);
         const waiting = !entry && bet.placedAt && stillDue && Date.now() - bet.placedAt < PENDING_TIMEOUT_MS;
         if (waiting) return true;
+        await recordBetHistory(bet, 'UNKNOWN');
         await chrome.storage.local.set({ pendingBet: null });
         addLogEntry(`Result unknown for ${bet.week || 'last bet'} - not counted, check Bet9ja`);
         return false;
@@ -477,6 +498,7 @@ async function settlePendingBet(results) {
         localLossStreak: lossStreak,
         streakLoss: streakLoss
     });
+    await recordBetHistory(bet, outcome);
     updateOverlayTotalProfit(currentTotal);
 
     if (st.chatId && st.licenseKey) {
@@ -733,7 +755,8 @@ async function executeBets(payload) {
         return;
     }
 
-    await chrome.storage.local.set({ pendingBet: { stake: finalStake, profit: pureProfit, week: currentWeekStr, roundId: payload.roundId, mode: targetMode, placedAt: Date.now() } });
+    await chrome.storage.local.set({ pendingBet: { stake: finalStake, profit: pureProfit, odds: oddsValue, week: currentWeekStr, roundId: payload.roundId, mode: targetMode, placedAt: Date.now(),
+        picks: picks.map(p => ({ home: p.target.home_team, away: p.target.away_team, pick: p.tag })) } });
     updateOverlayStatus('Bet Confirmed ✅', 'success');
     addLogEntry(`Placed: ₦${finalStake.toFixed(2)}`);
     simulateHumanClick(closeBtn);

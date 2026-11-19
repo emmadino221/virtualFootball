@@ -28,6 +28,7 @@ import threading
 import hmac
 from ext_sessions import Sessions, validate_command
 from licences import Licences
+from bet_scores import attach_scores
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -171,9 +172,16 @@ def dashboard_status():
     key = (request.get_json(silent=True) or {}).get("key")
     if not sessions.valid(key): return jsonify({"valid": False}), 404
     ready_week = current_ready_week
+    session = sessions.status(key)
+    state = session["state"]
+    # Show each played match with its final score from the generator's database.
+    if state.get("betHistory"):
+        state["betHistory"] = attach_scores(state["betHistory"], DB_PATH)
+    if state.get("pendingBet"):
+        state["pendingBet"] = attach_scores([state["pendingBet"]], DB_PATH)[0]
     return jsonify({
         "valid": True,
-        "session": sessions.status(key),
+        "session": session,
         "round": {"week": ready_week, "roundId": current_round_id if ready_week else None,
                   "picks": {mode: [public_pick(t) for t in picks] for mode, picks in picks_by_mode().items()} if ready_week else {}},
         "results": recent_results[-RECENT_RESULTS_KEPT:][::-1],
