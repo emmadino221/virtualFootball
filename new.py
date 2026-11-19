@@ -27,6 +27,7 @@ import numpy as np
 import threading
 import hmac
 from ext_sessions import Sessions, validate_command
+from licences import Licences
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -99,7 +100,10 @@ current_loss_streak_o25 = 0
 # Under 1.5 has no model of its own: every round the pick is the match with the
 # lowest Over 1.5 confidence, whatever that confidence is.
 # One session per licence key: its own reported state and its own command queue.
-sessions = Sessions(VALID_KEYS)
+# Keys issued from the website's owner section, with their expiry; VALID_KEYS never expire.
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+licences = Licences(DB_PATH)
+sessions = Sessions(VALID_KEYS, extra_valid=licences.is_valid)
 # The website calls the dashboard routes with the secret it already shares with this service.
 DASHBOARD_SECRET = os.getenv("VIRTUAL_DASHBOARD_SECRET") or os.getenv("VIRTUAL_FEED_SECRET", "")
 
@@ -188,6 +192,24 @@ def dashboard_command():
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
     return jsonify({"ok": True, "command": entry})
+
+@app.route('/dashboard/licence', methods=['POST'])
+def dashboard_licence():
+    # Grant, extend or revoke a licence issued from the website owner section.
+    if not dashboard_allowed(request): return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    key = data.get("key")
+    try:
+        if data.get("action") == "grant":
+            licences.grant(key, data.get("account", ""), float(data.get("expiresAt", 0)) / 1000)
+        elif data.get("action") == "revoke":
+            if not isinstance(key, str) or not key: raise ValueError("Invalid licence key.")
+            licences.revoke(key)
+        else:
+            raise ValueError("Unknown licence action.")
+    except (ValueError, TypeError) as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify({"ok": True})
 
 @app.route('/is_week_ready', methods=['GET'])
 def is_week_ready(): 

@@ -79,8 +79,10 @@ def validate_command(kind, value=None):
 
 
 class Sessions:
-    def __init__(self, valid_keys, clock=time.time):
+    def __init__(self, valid_keys, clock=time.time, extra_valid=None):
         self.valid_keys = set(valid_keys)
+        # Keys issued from the website (licences.py) are checked here, including their expiry.
+        self.extra_valid = extra_valid
         self.clock = clock
         self.lock = threading.Lock()
         self.states = {}       # key -> reported state plus lastSeen
@@ -89,7 +91,9 @@ class Sessions:
         self.chat_keys = {}    # Telegram chat id -> keys whose extension registered that chat
 
     def valid(self, key):
-        return isinstance(key, str) and key in self.valid_keys
+        if not isinstance(key, str):
+            return False
+        return key in self.valid_keys or bool(self.extra_valid and self.extra_valid(key))
 
     def sync(self, key, data, chat_id=None):
         """Record an extension's report and hand over its queued commands."""

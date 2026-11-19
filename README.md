@@ -85,6 +85,14 @@ website). Nginx does not forward `/virtual-api/dashboard/`. Commands reach the e
 its next `/sync`, within about 3 seconds. Sessions are kept in memory and refill on the
 next sync after a restart.
 
+### Licence keys
+
+Keys in `VALID_KEYS` (the service environment) never expire. Members' keys are issued from the
+website's owner section (Virtual football → Licence keys): the website calls
+`/dashboard/licence` to grant, renew or revoke, and `licences.py` stores only a hash of each key
+with its expiry in the `extension_licences` table of `matches.db`. No restart is needed; an
+expired or revoked key gets 401 on its next sync and the extension stops.
+
 ### Telegram commands
 
 `/start`, `/stop`, `/stake <amount>`, `/tp <amount>`, `/sl <amount>`,
