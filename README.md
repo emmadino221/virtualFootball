@@ -75,10 +75,23 @@ Every call needs the `X-License-Key` header.
 | `GET /is_week_ready` | Tells the extension whether the round's picks are ready. |
 | `POST /send_receipt` | The extension reports a settled bet so Telegram can show it. |
 
+### Website dashboard (`/dashboard/status`, `/dashboard/command`)
+
+Each licence key has its own session (`ext_sessions.py`): the state its extension reports,
+a command queue, and recently delivered commands. Members link their licence key once on
+`virtual-automation.html`; the website stores it encrypted and calls these two routes on
+`127.0.0.1:5000` with the `X-Dashboard-Secret` header (`VIRTUAL_FEED_SECRET`, shared with the
+website). Nginx does not forward `/virtual-api/dashboard/`. Commands reach the extension on
+its next `/sync`, within about 3 seconds. Sessions are kept in memory and refill on the
+next sync after a restart.
+
 ### Telegram commands
 
 `/start`, `/stop`, `/stake <amount>`, `/tp <amount>`, `/sl <amount>`,
 `/mode OU|O25|UN|1X2|GG|NG`, `/reset`, `/history`, `/status`.
+Commands reach only the extensions that saved that chat ID in their popup; the admin
+chats reach every connected extension. `/reset` from an admin chat also resets the
+shared market loss streaks.
 
 ## Frontend
 

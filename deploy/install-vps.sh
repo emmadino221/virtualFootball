@@ -118,7 +118,17 @@ nginx_path, snippet_path = sys.argv[1:]
 with open(nginx_path, encoding='utf-8') as source:
     config = source.read()
 marker = '# BEGIN Balls49 Virtual Football API'
-if marker not in config:
+end_marker = '# END Balls49 Virtual Football API'
+with open(snippet_path, encoding='utf-8') as snippet:
+    block = snippet.read().rstrip()
+if marker in config:
+    # Refresh an installed block so route changes in the snippet reach existing servers.
+    start = config.index(marker)
+    end = config.find(end_marker, start)
+    if end < 0:
+        raise SystemExit('Nginx has a Virtual Football begin marker without an end marker; review it before continuing.')
+    config = config[:start] + marker + '\n' + block + '\n' + config[end:]
+else:
     has_ingest = 'location = /internal/virtual-football-snapshot' in config
     has_extension_api = 'location ^~ /virtual-api/' in config
     if has_ingest != has_extension_api:

@@ -25,6 +25,8 @@ from pathlib import Path
 import joblib
 import numpy as np
 import threading
+import hmac
+from ext_sessions import Sessions, validate_command
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -96,12 +98,31 @@ current_loss_streak_un = 0
 current_loss_streak_o25 = 0
 # Under 1.5 has no model of its own: every round the pick is the match with the
 # lowest Over 1.5 confidence, whatever that confidence is.
-pending_commands = []
-last_known_ext_state = {"botEnabled": False, "baseStake": 100, "takeProfit": 0, "stopLoss": 0, "totalProfit": 0.0, "bettingMode": "OU"}
+# One session per licence key: its own reported state and its own command queue.
+sessions = Sessions(VALID_KEYS)
+# The website calls the dashboard routes with the secret it already shares with this service.
+DASHBOARD_SECRET = os.getenv("VIRTUAL_DASHBOARD_SECRET") or os.getenv("VIRTUAL_FEED_SECRET", "")
 
 def check_auth(req):
-    key = req.headers.get("X-License-Key")
-    return key in VALID_KEYS
+    return sessions.valid(req.headers.get("X-License-Key"))
+
+def dashboard_allowed(req):
+    supplied = req.headers.get("X-Dashboard-Secret", "")
+    return len(DASHBOARD_SECRET) >= 32 and hmac.compare_digest(supplied.encode(), DASHBOARD_SECRET.encode())
+
+def picks_by_mode():
+    return {
+        "OU": [t for t in current_live_targets if t.get("is_ou_target")],
+        "1X2": [t for t in current_live_targets if t.get("is_1x2_target")],
+        "GG": [t for t in current_live_targets if t.get("is_gg_target")],
+        "NG": [t for t in current_live_targets if t.get("is_ng_target")],
+        "UN": [t for t in current_live_targets if t.get("is_un_target")],
+        "O25": [t for t in current_live_targets if t.get("is_o25_target")],
+    }
+
+def loss_streaks():
+    return {"OU": current_loss_streak_ou, "O25": current_loss_streak_o25, "UN": current_loss_streak_un,
+            "1X2": current_loss_streak_1x2, "GG": current_loss_streak_gg, "NG": current_loss_streak_ng}
 
 @app.route('/get_bets', methods=['GET'])
 def get_bets(): 
@@ -111,14 +132,12 @@ def get_bets():
 @app.route('/sync', methods=['POST'])
 def sync_ext():
     if not check_auth(request): return jsonify({"error": "Unauthorized"}), 401
-    global last_known_ext_state, pending_commands
     data = request.get_json(silent=True)
     if not isinstance(data, dict): data = {}
     ext_chat_id = str(data.pop("chatId", "") or "").strip()
-    if re.fullmatch(r"-?\d{1,20}", ext_chat_id): authorized_chat_ids.add(ext_chat_id)
-    if data: last_known_ext_state.update(data)
-    cmds = pending_commands[:]
-    pending_commands.clear()
+    chat_id = ext_chat_id if re.fullmatch(r"-?\d{1,20}", ext_chat_id) else None
+    if chat_id: authorized_chat_ids.add(chat_id)
+    cmds = sessions.sync(request.headers.get("X-License-Key"), data, chat_id)
     ready_week = current_ready_week
     return jsonify({
         "ready_week": ready_week,
@@ -126,14 +145,7 @@ def sync_ext():
         "results": recent_results[-RECENT_RESULTS_KEPT:],
         # The bot bets the same picks the website publishes. Extensions older than 2.2 read
         # the legacy target lists, which stay empty so they can never bet a different market.
-        "picks": {
-            "OU": [t for t in current_live_targets if t.get("is_ou_target")],
-            "1X2": [t for t in current_live_targets if t.get("is_1x2_target")],
-            "GG": [t for t in current_live_targets if t.get("is_gg_target")],
-            "NG": [t for t in current_live_targets if t.get("is_ng_target")],
-            "UN": [t for t in current_live_targets if t.get("is_un_target")],
-            "O25": [t for t in current_live_targets if t.get("is_o25_target")],
-        },
+        "picks": picks_by_mode(),
         "targets_ou": [], "targets_1x2": [], "targets_gg": [],
         "loss_streak_ou": current_loss_streak_ou,
         "loss_streak_1x2": current_loss_streak_1x2,
@@ -143,6 +155,39 @@ def sync_ext():
         "loss_streak_o25": current_loss_streak_o25,
         "commands": cmds
     })
+
+def public_pick(target):
+    return {"home": target.get("home_team"), "away": target.get("away_team"), "prediction": target.get("prediction")}
+
+# Website dashboard. Reachable only from the website server: nginx does not forward these
+# paths, and every call needs the shared secret plus the member's own licence key.
+@app.route('/dashboard/status', methods=['POST'])
+def dashboard_status():
+    if not dashboard_allowed(request): return jsonify({"error": "Forbidden"}), 403
+    key = (request.get_json(silent=True) or {}).get("key")
+    if not sessions.valid(key): return jsonify({"valid": False}), 404
+    ready_week = current_ready_week
+    return jsonify({
+        "valid": True,
+        "session": sessions.status(key),
+        "round": {"week": ready_week, "roundId": current_round_id if ready_week else None,
+                  "picks": {mode: [public_pick(t) for t in picks] for mode, picks in picks_by_mode().items()} if ready_week else {}},
+        "results": recent_results[-RECENT_RESULTS_KEPT:][::-1],
+        "lossStreaks": loss_streaks(),
+        "serverTime": time.time(),
+    })
+
+@app.route('/dashboard/command', methods=['POST'])
+def dashboard_command():
+    if not dashboard_allowed(request): return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    key = data.get("key")
+    if not sessions.valid(key): return jsonify({"error": "Licence key not recognised."}), 404
+    try:
+        entry = sessions.queue(key, data.get("type"), data.get("value"))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify({"ok": True, "command": entry})
 
 @app.route('/is_week_ready', methods=['GET'])
 def is_week_ready(): 
@@ -200,42 +245,35 @@ def telegram_poller():
                     else: send_telegram_message(f"⛔ <b>NOT AUTHORISED.</b> This chat ({chat_id}) cannot control the bot.", chat_id)
         except Exception: time.sleep(5)
 
+def queue_for_chat(req_chat_id, kind, value=None):
+    """Queue a command for the extensions that registered this chat; admin chats reach all."""
+    keys = sessions.keys_for_chat(req_chat_id, admin=req_chat_id in ADMIN_CHAT_IDS)
+    for key in keys:
+        sessions.queue(key, kind, value, source="telegram")
+    return len(keys)
+
 def handle_telegram_command(text, req_chat_id):
-    global pending_commands, current_loss_streak_ou, current_loss_streak_1x2, current_loss_streak_gg, current_loss_streak_ng, current_loss_streak_un, current_loss_streak_o25
+    global current_loss_streak_ou, current_loss_streak_1x2, current_loss_streak_gg, current_loss_streak_ng, current_loss_streak_un, current_loss_streak_o25
     cmd = text.lower().split(); main_cmd = cmd[0]
-    if main_cmd == "/stop":
-        pending_commands.append({"type": "STOP"})
-        send_telegram_message("🛑 <b>COMMAND RECEIVED:</b> Bot Kill-Switch Activated.", req_chat_id)
-    elif main_cmd == "/start":
-        pending_commands.append({"type": "START"})
-        send_telegram_message("🟢 <b>COMMAND RECEIVED:</b> Bot Armed.", req_chat_id)
-    elif main_cmd == "/stake" and len(cmd) > 1:
+    control = {"/stop": ("STOP", "🛑 <b>COMMAND RECEIVED:</b> Bot Kill-Switch Activated."),
+               "/start": ("START", "🟢 <b>COMMAND RECEIVED:</b> Bot Armed."),
+               "/stake": ("STAKE", "💰 <b>COMMAND RECEIVED:</b> Base Stake updated to ₦{value:,.2f}"),
+               "/tp": ("TP", "🎯 <b>COMMAND RECEIVED:</b> Take Profit updated to +₦{value:,.2f}"),
+               "/sl": ("SL", "🛡️ <b>COMMAND RECEIVED:</b> Stop Loss updated to -₦{value:,.2f}"),
+               "/mode": ("MODE", "⚙️ <b>COMMAND RECEIVED:</b> Strategy switched to {value}"),
+               "/reset": ("RESET", "🔄 <b>COMMAND RECEIVED:</b> System Reset. Wiped to zero.")}
+    if main_cmd in control:
+        kind, reply = control[main_cmd]
         try:
-            val = float(cmd[1])
-            pending_commands.append({"type": "STAKE", "value": val})
-            send_telegram_message(f"💰 <b>COMMAND RECEIVED:</b> Base Stake updated to ₦{val}", req_chat_id)
-        except: send_telegram_message("⚠️ <b>ERROR:</b> Invalid amount.", req_chat_id)
-    elif main_cmd == "/tp" and len(cmd) > 1:
-        try:
-            val = float(cmd[1])
-            pending_commands.append({"type": "TP", "value": val})
-            send_telegram_message(f"🎯 <b>COMMAND RECEIVED:</b> Take Profit updated to +₦{val:,.2f}", req_chat_id)
-        except: send_telegram_message("⚠️ <b>ERROR:</b> Invalid amount.", req_chat_id)
-    elif main_cmd == "/sl" and len(cmd) > 1:
-        try:
-            val = float(cmd[1])
-            pending_commands.append({"type": "SL", "value": val})
-            send_telegram_message(f"🛡️ <b>COMMAND RECEIVED:</b> Stop Loss updated to -₦{val:,.2f}", req_chat_id)
-        except: send_telegram_message("⚠️ <b>ERROR:</b> Invalid amount.", req_chat_id)
-    elif main_cmd == "/mode" and len(cmd) > 1:
-        new_mode = cmd[1].upper()
-        if new_mode in ["OU", "1X2", "GG", "NG", "UN", "O25"]:
-            pending_commands.append({"type": "MODE", "value": new_mode})
-            send_telegram_message(f"⚙️ <b>COMMAND RECEIVED:</b> Strategy switched to {new_mode}", req_chat_id)
-    elif main_cmd == "/reset":
-        current_loss_streak_ou = current_loss_streak_1x2 = current_loss_streak_gg = current_loss_streak_ng = current_loss_streak_un = current_loss_streak_o25 = 0
-        pending_commands.append({"type": "RESET"})
-        send_telegram_message("🔄 <b>COMMAND RECEIVED:</b> System Reset. Wiped to zero.", req_chat_id)
+            value = validate_command(kind, cmd[1] if len(cmd) > 1 else None).get("value")
+        except ValueError as error:
+            send_telegram_message(f"⚠️ <b>ERROR:</b> {error}", req_chat_id); return
+        if main_cmd == "/reset" and req_chat_id in ADMIN_CHAT_IDS:
+            # Server-side market streaks are shared by everyone; only an admin chat resets them.
+            current_loss_streak_ou = current_loss_streak_1x2 = current_loss_streak_gg = current_loss_streak_ng = current_loss_streak_un = current_loss_streak_o25 = 0
+        if not queue_for_chat(req_chat_id, kind, value):
+            send_telegram_message("⚠️ <b>No connected extension</b> is linked to this chat. Save this chat ID in the extension popup first.", req_chat_id); return
+        send_telegram_message(reply.format(value=value), req_chat_id)
     elif main_cmd == "/history":
         try:
             conn_hist = sqlite3.connect(DB_PATH, timeout=20)
@@ -256,13 +294,17 @@ def handle_telegram_command(text, req_chat_id):
                 send_telegram_message(msg, req_chat_id)
         except: send_telegram_message(f"⚠️ <b>ERROR:</b> Could not read history.", req_chat_id)
     elif main_cmd == "/status":
-        st = last_known_ext_state
-        mode = st.get("bettingMode", "OU")
-        active_streak = {"OU": current_loss_streak_ou, "1X2": current_loss_streak_1x2, "GG": current_loss_streak_gg, "NG": current_loss_streak_ng, "UN": current_loss_streak_un, "O25": current_loss_streak_o25}.get(mode, 0)
-        profit = st.get("totalProfit", 0.0)
-        en = "🟢 RUNNING" if st.get("botEnabled") else "🔴 STOPPED"
-        msg = f"📊 <b>LIVE STATUS</b>\n\n<b>Engine:</b> {en}\n<b>Strategy:</b> {mode}\n<b>Base Stake:</b> ₦{st.get('baseStake', 0)}\n<b>Net Profit:</b> {'+' if profit >= 0 else '-'}₦{abs(profit):,.2f}\n<b>Global Loss Streak:</b> {active_streak}"
-        send_telegram_message(msg, req_chat_id)
+        keys = sessions.keys_for_chat(req_chat_id, admin=req_chat_id in ADMIN_CHAT_IDS)
+        if not keys:
+            send_telegram_message("📊 <b>LIVE STATUS</b>\n\nNo connected extension is linked to this chat.", req_chat_id); return
+        blocks = []
+        for key in keys:
+            report = sessions.status(key); st = report["state"]
+            mode = st.get("bettingMode", "OU")
+            profit = st.get("totalProfit", 0.0)
+            en = ("🟢 RUNNING" if st.get("botEnabled") else "🔴 STOPPED") + ("" if report["online"] else " (offline)")
+            blocks.append(f"<b>Licence …{key[-4:]}</b>\n<b>Engine:</b> {en}\n<b>Strategy:</b> {mode}\n<b>Base Stake:</b> ₦{st.get('baseStake', 0):,.2f}\n<b>Net Profit:</b> {'+' if profit >= 0 else '-'}₦{abs(profit):,.2f}\n<b>Market Loss Streak:</b> {loss_streaks().get(mode, 0)}")
+        send_telegram_message("📊 <b>LIVE STATUS</b>\n\n" + "\n\n".join(blocks), req_chat_id)
 
 # Rounds normally arrive every 2 minutes. If no picks are released for this long the
 # browser is stuck (logged out, page changed, or Chrome died) and the main loop cannot

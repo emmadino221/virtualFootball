@@ -299,7 +299,8 @@ function getIframeDoc() {
 async function fetchAIData() {
     const empty = { ok: false, targets: [], mode: 'OU', readyWeek: null, roundId: null, results: [], serverSupported: true };
     try {
-        const st = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'totalProfit', 'bettingMode', 'licenseKey', 'chatId']);
+        const st = await chrome.storage.local.get(['botEnabled', 'baseStake', 'takeProfit', 'stopLoss', 'totalProfit', 'bettingMode', 'licenseKey', 'chatId',
+            'localLossStreak', 'streakLoss', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'maxLossStreak', 'maxStake', 'minOdds', 'pendingBet']);
         const currentMode = st.bettingMode || 'OU';
 
         const response = await fetch(`${API_BASE_URL}/sync`, {
@@ -315,7 +316,18 @@ async function fetchAIData() {
                 stopLoss: st.stopLoss || 0,
                 totalProfit: st.totalProfit || 0,
                 bettingMode: currentMode,
-                chatId: st.chatId || ''
+                chatId: st.chatId || '',
+                // Reported for the website dashboard; the server keeps it per licence key.
+                localLossStreak: st.localLossStreak || 0,
+                streakLoss: st.streakLoss || 0,
+                winStreak: st.winStreak || 0,
+                maxWinStreak: st.maxWinStreak || 0,
+                maxLossStreakRec: st.maxLossStreakRec || 0,
+                maxLossStreak: parseInt(st.maxLossStreak, 10) || 0,
+                maxStake: parseFloat(st.maxStake) || 0,
+                minOdds: parseFloat(st.minOdds) > 1 ? parseFloat(st.minOdds) : DEFAULT_MIN_ODDS,
+                pendingBet: st.pendingBet ? { stake: st.pendingBet.stake, week: st.pendingBet.week, mode: st.pendingBet.mode } : null,
+                extensionVersion: chrome.runtime.getManifest ? chrome.runtime.getManifest().version : ''
             })
         });
 
