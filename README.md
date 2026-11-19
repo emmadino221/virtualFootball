@@ -35,6 +35,7 @@ round and nothing downstream chooses again.
 | `new.py` | The generator. Reads each round's fixtures and odds from Bet9ja with headless Chrome, scores them with the models, chooses the picks, settles them when scores arrive, sends Telegram messages, and serves the extension API. |
 | `publish_site_feed.py` | Reads `matches.db` and posts a signed snapshot to the website every 10 seconds. It passes the picks through unchanged. |
 | `over15_model.py`, `train_model_over15.py` | The Over 1.5 goals model and its trainer. The trained file `ai_brain_over15.pkl` is not in Git; it is created on the VPS. |
+| `over25_model.py`, `train_model_over25.py` | The Over 2.5 goals model and its trainer: 1X2 odds, the Over 1.5 price, each team's last 10 matches and the two teams' last 5 meetings. The trained file `ai_brain_over25.pkl` is not in Git; it is created on the VPS. |
 | `gg_odds_model.py`, `train_model_gg_odds.py` | GG/NG model that uses only the 1X2 odds, and its trainer. When its file `ai_brain_gg_odds.pkl` (not in Git, created on the VPS) exists, it replaces the older GG/NG model. |
 | `train_model.py`, `train_model_gg.py` | Trainers for the Win model (`ai_brain.pkl`) and the GG/NG model (`ai_brain_gg.pkl`). Both model files are in Git. |
 | `evaluate_models.py` | Read-only report: how the published predictions have done and whether another model type would rank matches better. Changes nothing. |
@@ -46,6 +47,7 @@ round and nothing downstream chooses again.
 | Market | Rule | Picks |
 | --- | --- | --- |
 | Over 1.5 | The two highest Over 1.5 confidences, each at least 60%. Fewer than two means the round is skipped. | 2 or 0 |
+| Over 2.5 | The highest Over 2.5 confidence of the round, only at 50% or more. Wins on 3+ goals. Website and Telegram only; no extension mode yet. | 1 or 0 |
 | Under 1.5 | The match with the lowest Over 1.5 confidence, whatever the percentage. Never one of the Over picks. | 1 |
 | GG | Highest-confidence GG prediction. | 1 or 0 |
 | NG | Highest-confidence NG prediction. | 1 or 0 |

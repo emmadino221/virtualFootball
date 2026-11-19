@@ -68,6 +68,37 @@ class BuildSnapshotTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid timestamp"):
                 build_snapshot(database)
 
+    def test_publishes_over25_pick_and_confidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "matches.db"
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """CREATE TABLE matches (
+                    id INTEGER PRIMARY KEY, home_team TEXT, away_team TEXT, week TEXT,
+                    prediction TEXT, prediction_gg TEXT, confidence REAL, timestamp TEXT,
+                    match_status TEXT, live_score TEXT, is_shortlisted INTEGER,
+                    website_round TEXT, website_markets TEXT, confidence_over25 REAL
+                )"""
+            )
+            connection.executemany(
+                "INSERT INTO matches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    (1, "ARS", "CHE", "Wk 1", "HOME", "GG", 55, "2026-11-01 08:00:00", "UPCOMING", "0 - 0", 1,
+                     "a" * 32, '["over25"]', 61.5),
+                    (2, "LIV", "TOT", "Wk 1", "AWAY", "NG", 52, "2026-11-01 08:00:00", "UPCOMING", "0 - 0", 0,
+                     "a" * 32, "[]", None),
+                ],
+            )
+            connection.commit()
+            connection.close()
+
+            snapshot = build_snapshot(database, source_at=1)
+
+        by_id = {match["id"]: match for match in snapshot["matches"]}
+        self.assertEqual(by_id[1]["selectedMarkets"], ["over25"])
+        self.assertEqual(by_id[1]["over25Confidence"], 61.5)
+        self.assertIsNone(by_id[2]["over25Confidence"])
+
     @patch("publish_site_feed.requests.post")
     def test_signs_the_exact_snapshot_body(self, post):
         response = post.return_value

@@ -10,7 +10,8 @@ Group=balls49
 WorkingDirectory=/home/balls49/virtualFootball
 EnvironmentFile=/etc/balls49/virtual.env
 ExecStart=/home/balls49/virtualFootball/.venv/bin/python /home/balls49/virtualFootball/new.py
-Restart=on-failure
+# Always restart: the generator exits on purpose when its browser stalls.
+Restart=always
 RestartSec=10
 UMask=0077
 NoNewPrivileges=true
