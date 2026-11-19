@@ -55,6 +55,21 @@ class Over25ModelTests(unittest.TestCase):
         self.assertIsNone(predict(None, match, [], [], []))
         self.assertIsNone(predict({'model': model, 'target': TARGET}, {**match, 'home_odds': 0}, [], [], []))
 
+    def test_inputs_without_usable_values_are_dropped_and_predict_uses_the_same_columns(self):
+        nan = float('nan')
+        vectors = [[1.0, nan, 5.0, 2.0], [2.0, nan, 5.0, nan], [3.0, nan, 5.0, 4.0]]
+        # Column 1 is missing everywhere (the Over 1.5 price before 14 November), column 2 never changes.
+        self.assertEqual(over25_model.usable_columns(vectors), [0, 3])
+        self.assertEqual(over25_model.select(vectors, [0, 3])[2], [3.0, 4.0])
+        self.assertEqual(over25_model.usable_columns([]), [])
+        model = FakeModel()
+        match = {'home_odds': 2.1, 'draw_odds': 3.4, 'away_odds': 3.3}
+        columns = [i for i, name in enumerate(over25_model.FEATURE_NAMES) if name != 'over15_prob']
+        self.assertAlmostEqual(predict({'model': model, 'target': TARGET, 'columns': columns}, match, [3], [1], []), 64.0)
+        self.assertEqual(len(model.seen), len(over25_model.FEATURE_NAMES) - 1)
+        full = over25_model.features(match, [3], [1], [])
+        self.assertTrue(same(model.seen, [full[i] for i in columns]))
+
     def test_training_and_live_inputs_match_and_never_see_the_result(self):
         rows = []
         teams = ['ARS', 'CHE', 'LIV', 'TOT']

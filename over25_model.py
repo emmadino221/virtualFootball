@@ -73,12 +73,33 @@ def predict(package, match, home_totals, away_totals, meeting_totals):
         return None
     try:
         values = features(match, home_totals, away_totals, meeting_totals)
+        # The trainer drops inputs that had no usable values (see usable_columns).
+        values = [values[i] for i in package.get('columns', range(len(values)))]
         model = package['model']
         index = list(model.classes_).index('OVER')
         confidence = float(model.predict_proba([values])[0][index]) * 100
         return confidence if math.isfinite(confidence) and 0 <= confidence <= 100 else None
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
+
+
+def usable_columns(vectors):
+    """Indices of inputs with at least two distinct known values.
+
+    A column that is missing everywhere (the Over 1.5 price before it was collected) or
+    never changes gives the model nothing to learn, and the gradient-boosting binning step
+    fails on it, so it is left out of training and prediction.
+    """
+    columns = []
+    for index in range(len(vectors[0]) if vectors else 0):
+        known = {row[index] for row in vectors if not math.isnan(row[index])}
+        if len(known) >= 2:
+            columns.append(index)
+    return columns
+
+
+def select(vectors, columns):
+    return [[row[i] for i in columns] for row in vectors]
 
 
 def recent_totals(cursor, home_team, away_team):

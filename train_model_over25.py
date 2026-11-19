@@ -15,7 +15,7 @@ import tempfile
 import joblib
 from dotenv import load_dotenv
 
-from over25_model import FEATURE_NAMES, MEETING_WINDOW, TARGET, TEAM_WINDOW, features, total_goals
+from over25_model import FEATURE_NAMES, MEETING_WINDOW, TARGET, TEAM_WINDOW, features, select, total_goals, usable_columns
 
 MINIMUM_MATCHES = 2000
 
@@ -53,11 +53,11 @@ def load_samples(db):
     return samples
 
 
-def top_pick_rate(model, holdout):
+def top_pick_rate(model, holdout, columns):
     """Share of rounds whose highest-confidence match went over 2.5: what the published pick does."""
     rounds = defaultdict(list)
     for vector, label, _, round_key in holdout:
-        rounds[round_key].append((vector, label))
+        rounds[round_key].append(([vector[i] for i in columns], label))
     index = list(model.classes_).index('OVER')
     hits = played = 0
     for entries in rounds.values():
@@ -92,22 +92,30 @@ def main():
         return HistGradientBoostingClassifier(max_iter=200, learning_rate=0.05, max_leaf_nodes=15,
                                               min_samples_leaf=50, l2_regularization=1.0, random_state=89)
 
+    # Inputs with no usable values in the rows being fitted are left out (see usable_columns):
+    # the Over 1.5 price, for one, was only collected from 14 November 2026.
+    train_columns = usable_columns([row[0] for row in train])
     model = new_model()
-    model.fit([row[0] for row in train], [row[1] for row in train])
-    accuracy = model.score([row[0] for row in holdout], [row[1] for row in holdout])
+    model.fit(select([row[0] for row in train], train_columns), [row[1] for row in train])
+    accuracy = model.score(select([row[0] for row in holdout], train_columns), [row[1] for row in holdout])
     base_rate = sum(row[1] == 'OVER' for row in holdout) / len(holdout)
-    pick_rate, rounds = top_pick_rate(model, holdout)
+    pick_rate, rounds = top_pick_rate(model, holdout, train_columns)
     print(f'Training matches: {len(train)}; holdout matches: {len(holdout)}')
     print(f'Holdout accuracy: {accuracy:.1%} (always-majority baseline {max(base_rate, 1 - base_rate):.1%})')
     print(f'Holdout Over 2.5 rate, any match: {base_rate:.1%}')
     print(f'Holdout Over 2.5 rate, top pick of each round: {pick_rate:.1%} over {rounds} rounds')
     with_price = sum(not math.isnan(row[0][FEATURE_NAMES.index('over15_prob')]) for row in samples)
     print(f'Matches with an Over 1.5 price: {with_price} of {len(samples)}')
+    columns = usable_columns([row[0] for row in samples])
+    skipped = [name for index, name in enumerate(FEATURE_NAMES) if index not in columns]
+    print(f'Inputs left out of the saved model (no usable values): {", ".join(skipped) or "none"}')
+    if [name for index, name in enumerate(FEATURE_NAMES) if index not in train_columns] != skipped:
+        print('The holdout check above ran without some inputs the saved model uses; treat it as a rough guide.')
     print('Confidence is a model estimate, not a calibrated win guarantee.')
 
     final = new_model()
-    final.fit([row[0] for row in samples], [row[1] for row in samples])
-    package = {'model': final, 'target': TARGET, 'features': FEATURE_NAMES, 'training_rows': len(samples),
+    final.fit(select([row[0] for row in samples], columns), [row[1] for row in samples])
+    package = {'model': final, 'target': TARGET, 'features': FEATURE_NAMES, 'columns': columns, 'training_rows': len(samples),
                'trained_through': samples[-1][2], 'holdout_accuracy': accuracy,
                'holdout_base_rate': base_rate, 'holdout_top_pick_rate': pick_rate}
     output.parent.mkdir(parents=True, exist_ok=True)
