@@ -37,7 +37,12 @@ except Exception: ai_model_over15 = None
 # Over 2.5 model: 1X2 odds, the Over 1.5 price, each team's recent goals and past meetings.
 AI_OVER25_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_OVER25_MODEL_PATH", BASE_DIR / "ai_brain_over25.pkl")).expanduser()
 try: ai_model_over25 = joblib.load(AI_OVER25_MODEL_PATH)
-except Exception: ai_model_over25 = None
+except Exception as over25_error:
+    ai_model_over25 = None
+    # Without this file no Over 2.5 picks are published; say so instead of failing quietly.
+    print(f"⚠️ Over 2.5 model not loaded from {AI_OVER25_MODEL_PATH}: {over25_error}. Run train_model_over25.py as the balls49 user.", flush=True)
+else:
+    print(f"🧠 Over 2.5 model loaded ({ai_model_over25.get('training_rows', '?')} training matches).", flush=True)
 # Odds-only GG/NG model. When the file is missing the older team-and-form model is used.
 AI_GG_ODDS_MODEL_PATH = Path(os.getenv("VIRTUAL_AI_GG_ODDS_MODEL_PATH", BASE_DIR / "ai_brain_gg_odds.pkl")).expanduser()
 try: ai_model_gg_odds = joblib.load(AI_GG_ODDS_MODEL_PATH)

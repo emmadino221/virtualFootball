@@ -75,6 +75,7 @@ def main():
     load_dotenv(base / '.env')
     db = Path(os.getenv('VIRTUAL_DB_PATH', base / 'matches.db')).expanduser()
     output = Path(os.getenv('VIRTUAL_AI_OVER25_MODEL_PATH', base / 'ai_brain_over25.pkl')).expanduser()
+    print(f'Database: {db}')
     samples = load_samples(db)
     if len(samples) < MINIMUM_MATCHES:
         raise ValueError(f'Need at least {MINIMUM_MATCHES} settled matches with valid odds and scores; found {len(samples)}.')
