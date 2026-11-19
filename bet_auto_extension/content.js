@@ -13,7 +13,7 @@ const SELECTORS = {
     closeTicketBtn: "#button_sent-ticket-close"      
 };
 
-// The server address lives in api-base.js (prediction.emmyfxchart.com, with the IP as fallback).
+// The server address lives in api-base.js (predictions.emmyfxchart.com, with the IP as fallback).
 
 const POLLING_INTERVAL_MS = 3000;
 // A loss is only recovered by the next stake when the odds are at least M / (M - 1).

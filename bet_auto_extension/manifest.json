@@ -10,7 +10,7 @@
   ],
  "host_permissions": [
     "https://*.bet9ja.com/*",
-    "https://prediction.emmyfxchart.com/*",
+    "https://predictions.emmyfxchart.com/*",
     "https://159.65.25.30/*"
 ],
   "action": {

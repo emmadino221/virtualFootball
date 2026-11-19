@@ -21,7 +21,7 @@ publish_site_feed.py  (balls49-virtual-feed.service)
       ▼
 balls49 website  (virtual-football.js receiver, React pages)
       ▼
-https://prediction.emmyfxchart.com/virtual-football.html  and  /virtual-results.html
+https://predictions.emmyfxchart.com/virtual-football.html  and  /virtual-results.html
 ```
 
 One rule holds everywhere: the picks shown on the website, sent to Telegram and
@@ -164,7 +164,7 @@ cd /home/balls49/virtualFootball && git pull --ff-only origin main && bash deplo
 ```
 
 Extension: reload it in `chrome://extensions`, reload the Bet9ja tab, press
-Start. To confirm a deploy, open `https://prediction.emmyfxchart.com/public-virtual-football`
+Start. To confirm a deploy, open `https://predictions.emmyfxchart.com/public-virtual-football`
 and look for the new data in the newest round.
 
 ## What still needs to be done
@@ -216,8 +216,8 @@ Housekeeping:
 11. **`bet_auto_extension.zip` and `work.py`** are still tracked in Git but
     deleted in the local working copy. Decide whether to remove them for good
     or rebuild the zip from the current extension.
-12. **Domain.** Extension 3.5 connects to `prediction.emmyfxchart.com` and falls back to
+12. **Domain.** Extension 3.5 connects to `predictions.emmyfxchart.com` and falls back to
     the server IP (`159.65.25.30`) while the domain cannot be reached (`api-base.js`). The
     domain needs a DNS A record to the server and is set up on the server with
-    `bash deploy/add-site-domain.sh prediction.emmyfxchart.com` in the balls49 repository.
+    `bash deploy/add-site-domain.sh predictions.emmyfxchart.com` in the balls49 repository.
     Run that again after `deploy/install-vps.sh`, which only updates the IP's nginx block.
