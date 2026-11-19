@@ -79,6 +79,8 @@ const ctx = {
     Date: class extends Date { static now() { return clock; } }
 };
 vm.createContext(ctx);
+// Chrome loads api-base.js before content.js (manifest.json).
+vm.runInContext(fs.readFileSync(require('path').join(require('path').dirname(process.argv[2]), 'api-base.js'), 'utf8'), ctx);
 vm.runInContext(fs.readFileSync(process.argv[2], 'utf8') + '\nglobalThis.executeBets = executeBets;', ctx);
 
 const A = { home_team: 'ASV', away_team: 'LEE', prediction: 'HOME' };

@@ -139,7 +139,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                const response = await fetch('https://159.65.25.30/virtual-api/get_bets', {
+                const response = await virtualApiFetch('/get_bets', {
                     headers: { 'X-License-Key': res.licenseKey || '' }
                 });
                 

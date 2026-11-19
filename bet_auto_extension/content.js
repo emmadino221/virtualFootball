@@ -13,8 +13,7 @@ const SELECTORS = {
     closeTicketBtn: "#button_sent-ticket-close"      
 };
 
-// 🔴 CHANGE THIS IP ADDRESS TO MATCH WHERE YOUR PYTHON SCRIPT IS RUNNING
-const API_BASE_URL = 'https://159.65.25.30/virtual-api';
+// The server address lives in api-base.js (prediction.emmyfxchart.com, with the IP as fallback).
 
 const POLLING_INTERVAL_MS = 3000;
 // A loss is only recovered by the next stake when the odds are at least M / (M - 1).
@@ -303,7 +302,7 @@ async function fetchAIData() {
             'localLossStreak', 'streakLoss', 'winStreak', 'maxWinStreak', 'maxLossStreakRec', 'maxLossStreak', 'maxStake', 'minOdds', 'pendingBet']);
         const currentMode = st.bettingMode || 'OU';
 
-        const response = await fetch(`${API_BASE_URL}/sync`, {
+        const response = await virtualApiFetch('/sync', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -481,7 +480,7 @@ async function settlePendingBet(results) {
     updateOverlayTotalProfit(currentTotal);
 
     if (st.chatId && st.licenseKey) {
-        fetch(`${API_BASE_URL}/send_receipt`, {
+        virtualApiFetch('/send_receipt', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-License-Key': st.licenseKey },
             body: JSON.stringify({ chat_id: st.chatId, result: outcome, stake: bet.stake, profit: bet.profit, net_profit: currentTotal, win_streak: wStrk, loss_streak: lossStreak, max_win_streak: mWStrk, max_loss_streak: mLStrk })

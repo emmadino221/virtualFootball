@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Auto Executor Bot",
-  "version": "3.4",
+  "version": "3.5",
   "description": "AI-driven betting automation with UI Control Panel.",
   "permissions": [
     "activeTab", 
@@ -10,6 +10,7 @@
   ],
  "host_permissions": [
     "https://*.bet9ja.com/*",
+    "https://prediction.emmyfxchart.com/*",
     "https://159.65.25.30/*"
 ],
   "action": {
@@ -19,7 +20,7 @@
   "content_scripts": [
     {
       "matches": ["*://vsmobile.bet9ja.com/*"],
-      "js": ["content.js"],
+      "js": ["api-base.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
